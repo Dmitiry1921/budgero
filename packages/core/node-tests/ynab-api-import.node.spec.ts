@@ -724,6 +724,237 @@ describe('YNAB API import', () => {
     }
   });
 
+  it.each([
+    ['duplicate names', 'Checking', 'Checking'],
+    ['trailing whitespace', 'Checking ', 'Tracking Savings '],
+    ['names that collide after trimming', 'Checking', ' Checking '],
+    ['nonbreaking spaces', '\u00a0Checking\u00a0', '\u00a0Tracking Savings\u00a0'],
+    ['object property names', '__proto__', 'constructor'],
+  ])('imports every account by source ID with %s', async (_, checkingName, savingsName) => {
+    const adapter = await NodeSqlJsAdapter.create();
+    try {
+      const snapshot = snapshotFixture();
+      snapshot.plan.accounts[0].name = checkingName;
+      snapshot.plan.accounts[1].name = savingsName;
+      snapshot.plan.accounts.push({
+        ...snapshot.plan.accounts[1],
+        id: 'empty-account',
+        balance: 0,
+      });
+      const progress: YNABImportProgressUpdate[] = [];
+      expect(YNABImportService.inspectYNABApiSnapshot(snapshot).accountCount).toBe(3);
+
+      const result = await new YNABImportService(adapter).importYNABFromApiSnapshotWithSummary(
+        snapshot,
+        {
+          spaceId: SPACE_ID,
+          budgetName: 'Account identity import',
+          currency: 'USD',
+          numberFormat: '123,456.78',
+          badgeIcon: 'HelpCircle',
+          onProgress: (update) => {
+            progress.push(update);
+          },
+        }
+      );
+      expect(result.summary).toMatchObject({
+        sourceRowsVerified: 6,
+        transactionsCreated: 5,
+        accountBalancesVerified: 3,
+        splitTransactionsImported: 1,
+      });
+      expect(result.verification?.status).toBe('passed');
+      expect(progress).toContainEqual(
+        expect.objectContaining({
+          stage: 'accounts',
+          status: 'passed',
+          detail: '3 accounts',
+        })
+      );
+
+      const accounts = adapter
+        .prepare(
+          `
+        SELECT json_extract(a.Metadata, '$.ynab_account_id') AS SourceId,
+               a.Name, a.BalanceNative, a.Archived, COUNT(t.ID) AS Transactions
+        FROM accounts a LEFT JOIN transactions t ON t.AccountID = a.ID
+        WHERE a.BudgetID = ? GROUP BY a.ID ORDER BY SourceId
+      `
+        )
+        .all(result.budgetId);
+      expect(accounts).toEqual([
+        {
+          SourceId: 'account-checking',
+          Name: checkingName,
+          BalanceNative: -5_000,
+          Archived: 0,
+          Transactions: 4,
+        },
+        {
+          SourceId: 'account-savings',
+          Name: savingsName,
+          BalanceNative: 10_000,
+          Archived: 1,
+          Transactions: 1,
+        },
+        {
+          SourceId: 'empty-account',
+          Name: savingsName,
+          BalanceNative: 0,
+          Archived: 1,
+          Transactions: 0,
+        },
+      ]);
+      expect(
+        adapter
+          .prepare(
+            `
+        SELECT COUNT(*) AS Legs, COUNT(DISTINCT AccountID) AS Accounts,
+               SUM(InflowNative - OutflowNative) AS Net
+        FROM transactions WHERE BudgetID = ? AND TransferID <> '' GROUP BY TransferID
+      `
+          )
+          .all(result.budgetId)
+      ).toEqual([{ Legs: 2, Accounts: 2, Net: 0 }]);
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('uses API parent IDs for splits and preserves memo text that resembles CSV markers', async () => {
+    const adapter = await NodeSqlJsAdapter.create();
+    try {
+      const snapshot = snapshotFixture();
+      const ordinaryMemos = ['Split (1/2): ordinary one', 'Split (2/2): ordinary two'];
+      ordinaryMemos.forEach((memo, index) => {
+        snapshot.plan.transactions.push({
+          ...snapshot.plan.transactions[0],
+          id: `ordinary-${index}`,
+          date: '2026-09-05',
+          amount: 0,
+          memo,
+          payee_id: 'payee-store',
+        });
+      });
+      snapshot.plan.subtransactions[2].memo = 'Split (1/2): literal child memo';
+      snapshot.plan.subtransactions[3].memo = 'Split (2/2): another literal child memo';
+
+      const result = await new YNABImportService(adapter).importYNABFromApiSnapshotWithSummary(
+        snapshot,
+        {
+          spaceId: SPACE_ID,
+          budgetName: 'Explicit API split identities',
+          currency: 'USD',
+          numberFormat: '123,456.78',
+          badgeIcon: 'HelpCircle',
+        }
+      );
+      expect(result.summary).toMatchObject({
+        sourceRowsVerified: 8,
+        transactionsCreated: 7,
+        splitTransactionsImported: 1,
+      });
+      expect(result.verification?.status).toBe('passed');
+      expect(
+        adapter
+          .prepare(
+            `
+        SELECT t.Memo, COUNT(s.ID) AS Parts FROM transactions t
+        LEFT JOIN transaction_splits s ON s.TransactionID = t.ID
+        WHERE t.BudgetID = ? AND t.Date = '2026-09-05' GROUP BY t.ID ORDER BY t.ID
+      `
+          )
+          .all(result.budgetId)
+      ).toEqual(ordinaryMemos.map((Memo) => ({ Memo, Parts: 0 })));
+      expect(
+        adapter
+          .prepare(
+            `
+        SELECT s.Memo FROM transaction_splits s JOIN transactions t ON t.ID = s.TransactionID
+        WHERE t.BudgetID = ? ORDER BY s.OrderIndex
+      `
+          )
+          .all(result.budgetId)
+      ).toEqual([
+        { Memo: snapshot.plan.subtransactions[2].memo },
+        { Memo: snapshot.plan.subtransactions[3].memo },
+      ]);
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('does not classify an ordinary API payee as a transfer based on its name', async () => {
+    const adapter = await NodeSqlJsAdapter.create();
+    try {
+      const snapshot = snapshotFixture();
+      snapshot.plan.payees.find((payee) => payee.id === 'payee-store')!.name =
+        'Transfer : Tracking Savings';
+      const result = await new YNABImportService(adapter).importYNABFromApiSnapshotWithSummary(
+        snapshot,
+        {
+          spaceId: SPACE_ID,
+          budgetName: 'API transfer identities',
+          currency: 'USD',
+          numberFormat: '123,456.78',
+          badgeIcon: 'HelpCircle',
+        }
+      );
+      expect(result.summary).toMatchObject({ sourceRowsVerified: 6, splitTransactionsImported: 1 });
+      expect(result.verification?.status).toBe('passed');
+      expect(
+        adapter
+          .prepare(
+            `
+        SELECT COUNT(*) AS Count FROM transactions WHERE BudgetID = ? AND TransferID <> ''
+      `
+          )
+          .get(result.budgetId)
+      ).toEqual({ Count: 2 });
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('pairs split transfers by child relationships despite different memos and dates', async () => {
+    const adapter = await NodeSqlJsAdapter.create();
+    try {
+      const snapshot = snapshotFixture();
+      const child = snapshot.plan.subtransactions[0];
+      const receiver = snapshot.plan.transactions[2];
+      child.transfer_transaction_id = receiver.id;
+      receiver.transfer_transaction_id = child.transaction_id;
+      child.memo = 'Sending memo';
+      receiver.memo = 'Receiving memo';
+      receiver.date = '2026-09-04';
+      const result = await new YNABImportService(adapter).importYNABFromApiSnapshotWithSummary(
+        snapshot,
+        {
+          spaceId: SPACE_ID,
+          budgetName: 'API split transfer relationship',
+          currency: 'USD',
+          numberFormat: '123,456.78',
+          badgeIcon: 'HelpCircle',
+        }
+      );
+      expect(result.summary.sourceRowsVerified).toBe(6);
+      expect(result.verification?.status).toBe('passed');
+      expect(
+        adapter
+          .prepare(
+            `
+        SELECT COUNT(*) AS Legs, COUNT(DISTINCT AccountID) AS Accounts,
+               SUM(InflowNative - OutflowNative) AS Net
+        FROM transactions WHERE BudgetID = ? AND TransferID <> '' GROUP BY TransferID
+      `
+          )
+          .all(result.budgetId)
+      ).toEqual([{ Legs: 2, Accounts: 2, Net: 0 }]);
+    } finally {
+      adapter.close();
+    }
+  });
+
   it('reports transaction batch progress for large imports', async () => {
     const adapter = await NodeSqlJsAdapter.create();
     try {

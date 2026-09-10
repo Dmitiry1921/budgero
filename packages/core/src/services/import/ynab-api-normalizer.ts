@@ -80,7 +80,9 @@ export function mapYNABAccountType(type: string): string {
   }
 }
 
-function transferIdFor(transaction: YNABApiTransaction): string | undefined {
+function transferIdFor(
+  transaction: Pick<YNABApiTransaction, 'id'> & { transfer_transaction_id?: string | null }
+): string | undefined {
   if (!transaction.transfer_transaction_id) return undefined;
   return `ynab_transfer_${[transaction.id, transaction.transfer_transaction_id].sort().join('_')}`;
 }
@@ -94,12 +96,20 @@ export function normalizeYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): Normali
   const categoriesById = new Map(plan.categories.map((category) => [category.id, category]));
   const payeesById = new Map(plan.payees.map((payee) => [payee.id, payee]));
   const childrenByTransactionId = new Map<string, YNABApiSubtransaction[]>();
+  const splitTransferIds = new Map<string, string>();
 
   for (const child of plan.subtransactions) {
     if (child.deleted) continue;
     const children = childrenByTransactionId.get(child.transaction_id) || [];
     children.push(child);
     childrenByTransactionId.set(child.transaction_id, children);
+    if (child.transfer_account_id && child.transfer_transaction_id) {
+      const transferId = transferIdFor(child)!;
+      splitTransferIds.set(child.id, transferId);
+      // The receiving transaction may point back to the split parent. Use
+      // the child's explicit relationship for both legs of this transfer.
+      splitTransferIds.set(child.transfer_transaction_id, transferId);
+    }
   }
 
   const categoryFields = (categoryId: string | null) => {
@@ -176,18 +186,21 @@ export function normalizeYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): Normali
       }
       sourceSubtransactions += children.length;
       expectedRegisterRows += children.length;
-      for (let index = 0; index < children.length; index++) {
-        const child = children[index];
+      for (const child of children) {
         registerRows.push({
           Account: account.name,
           Flag: '',
           Date: transaction.date,
           Payee: transactionPayee(child.payee_id, child.transfer_account_id, transaction.payee_id),
           ...categoryFields(child.category_id),
-          Memo: `Split (${index + 1}/${children.length}): ${child.memo || ''}`,
+          Memo: child.memo || '',
           ...amountFields(child.amount),
           Cleared: transaction.cleared,
           SourceId: transaction.id,
+          SourceAccountId: account.id,
+          SourceSubtransactionId: child.id,
+          SourceTransferAccountId: child.transfer_account_id,
+          TransferID: splitTransferIds.get(child.id),
           ExcludeFromReadyToAssign: isCategorylessBudgetBoundaryTransfer(
             transaction.account_id,
             child.transfer_account_id,
@@ -210,7 +223,9 @@ export function normalizeYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): Normali
       ...amountFields(transaction.amount),
       Cleared: transaction.cleared,
       SourceId: transaction.id,
-      TransferID: transferIdFor(transaction),
+      SourceAccountId: account.id,
+      SourceTransferAccountId: transaction.transfer_account_id,
+      TransferID: splitTransferIds.get(transaction.id) || transferIdFor(transaction),
       ExcludeFromReadyToAssign: isCategorylessBudgetBoundaryTransfer(
         transaction.account_id,
         transaction.transfer_account_id,

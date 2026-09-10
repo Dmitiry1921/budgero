@@ -256,6 +256,7 @@ export interface YNABApiSubtransaction {
   payee_id: string | null;
   category_id: string | null;
   transfer_account_id: string | null;
+  transfer_transaction_id?: string | null;
   deleted: boolean;
 }
 
@@ -331,8 +332,13 @@ export interface YNABRegisterRow {
   Cleared: string;
   /** Stable transfer relationship supplied by the YNAB API import path. */
   TransferID?: string;
-  /** Source transaction ID used to keep API imports deterministic on tied dates/amounts. */
+  /** API parent transaction identity, also used for deterministic same-day ordering. */
   SourceId?: string;
+  /** API account identities; display names must not be used to resolve these rows. */
+  SourceAccountId?: string;
+  SourceTransferAccountId?: string | null;
+  /** An API split child belongs to SourceId regardless of its memo or payee. */
+  SourceSubtransactionId?: string;
   /** Preserve a source-system transfer that intentionally did not move RTA. */
   ExcludeFromReadyToAssign?: boolean;
 }

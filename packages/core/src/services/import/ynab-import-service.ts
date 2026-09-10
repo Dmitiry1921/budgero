@@ -87,7 +87,16 @@ function transferCounterpartyName(row: YNABRegisterRow): string | null {
 }
 
 function isTransferRow(row: YNABRegisterRow): boolean {
+  if (row.SourceAccountId !== undefined) return Boolean(row.SourceTransferAccountId);
   return transferCounterpartyName(row) !== null;
+}
+
+function accountKey(name: string, sourceId?: string | null): string {
+  return sourceId ? `id:${sourceId}` : `name:${name.trim()}`;
+}
+
+function rowAccountId(row: YNABRegisterRow, accounts: Map<string, number>): number | undefined {
+  return accounts.get(accountKey(row.Account, row.SourceAccountId));
 }
 
 function categoryKey(category: YNABCategoryDescriptor): string {
@@ -167,6 +176,36 @@ function detectSplitGroups(registerRows: YNABRegisterRow[]): YNABSplitGroup[] {
   const groups: YNABSplitGroup[] = [];
 
   for (let index = 0; index < registerRows.length; index++) {
+    const firstRow = registerRows[index];
+    if (firstRow.SourceId !== undefined) {
+      // API children are emitted together by their parent. Text in ordinary
+      // transaction memos is never evidence of an API split.
+      if (!firstRow.SourceSubtransactionId) continue;
+      let endIndex = index + 1;
+      while (
+        endIndex < registerRows.length &&
+        registerRows[endIndex].SourceSubtransactionId &&
+        registerRows[endIndex].SourceId === firstRow.SourceId &&
+        registerRows[endIndex].SourceAccountId === firstRow.SourceAccountId
+      ) {
+        endIndex++;
+      }
+      const rows = registerRows.slice(index, endIndex);
+      if (rows.length > 1) {
+        groups.push({
+          startIndex: index,
+          rows,
+          markers: rows.map((row, partIndex) => ({
+            part: partIndex + 1,
+            total: rows.length,
+            memo: row.Memo,
+          })),
+          containsTransfer: rows.some(isTransferRow),
+        });
+      }
+      index = endIndex - 1;
+      continue;
+    }
     const firstMarker = parseSplitMarker(registerRows[index].Memo || '');
     if (!firstMarker || firstMarker.part !== 1) continue;
 
@@ -234,7 +273,11 @@ function inspectYNABRows(
 
   return {
     registerRowCount: registerRows.length,
-    accountCount: new Set(registerRows.map((row) => row.Account.trim()).filter(Boolean)).size,
+    accountCount: new Set(
+      registerRows
+        .filter((row) => row.SourceAccountId || row.Account.trim())
+        .map((row) => accountKey(row.Account, row.SourceAccountId))
+    ).size,
     categoryCount: exportedPlanCategoryKeys.size + missing.size,
     missingCategories: [...missing.values()],
     splitTransactions: splitGroups
@@ -324,8 +367,8 @@ export class YNABImportService {
   }
 
   static inspectYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): YNABImportPreview {
-    const { registerRows, budgetRows } = normalizeYNABApiSnapshot(snapshot);
-    return inspectYNABRows(registerRows, budgetRows);
+    const { registerRows, budgetRows, accountSpecs } = normalizeYNABApiSnapshot(snapshot);
+    return { ...inspectYNABRows(registerRows, budgetRows), accountCount: accountSpecs.length };
   }
 
   async importYNABFromZip(
@@ -476,13 +519,13 @@ export class YNABImportService {
         categories,
         accountSpecs
       );
-      debugLog(`Created ${Object.keys(accounts).length} accounts`);
+      debugLog(`Created ${accounts.size} accounts`);
       await reportProgress({
         stage: 'accounts',
         status: 'passed',
         progress: 42,
         label: 'Accounts imported',
-        detail: `${Object.keys(accounts).length} accounts`,
+        detail: `${accounts.size} accounts`,
       });
 
       await reportProgress({
@@ -702,7 +745,7 @@ export class YNABImportService {
 
   private async verifyYNABAccountBalances(
     budgetId: number,
-    accounts: Record<string, number>,
+    accounts: Map<string, number>,
     accountSpecs: YNABImportAccountSpec[]
   ): Promise<{ verified: number; debtBalanceAdjustments: YNABDebtBalanceAdjustment[] }> {
     const verifiableSpecs = accountSpecs.filter(
@@ -720,7 +763,7 @@ export class YNABImportService {
     );
 
     for (const spec of verifiableSpecs) {
-      const accountId = accounts[spec.name];
+      const accountId = accounts.get(accountKey(spec.name, spec.ynabAccountId));
       let account = accountId === undefined ? undefined : this.accountService.getAccount(accountId);
       let computedBalance = account?.BalanceNative;
 
@@ -1068,8 +1111,8 @@ export class YNABImportService {
     currency: string,
     categories: Record<string, number>,
     accountSpecs?: YNABImportAccountSpec[]
-  ): Promise<Record<string, number>> {
-    const accounts: Record<string, number> = {};
+  ): Promise<Map<string, number>> {
+    const accounts = new Map<string, number>();
     const uniqueAccounts = new Set<string>();
     const creditCards = this.creditCardAccountNames(budgetRows);
 
@@ -1117,7 +1160,7 @@ export class YNABImportService {
           : undefined,
         spec.onBudget
       );
-      accounts[accountName] = account.ID;
+      accounts.set(accountKey(accountName, spec.ynabAccountId), account.ID);
       if (spec.archived) {
         this.accountService.setAccountArchived(account.ID, true);
       }
@@ -1205,7 +1248,7 @@ export class YNABImportService {
   private async importTransactionsWithProperBalances(
     budgetId: number,
     registerRows: YNABRegisterRow[],
-    accounts: Record<string, number>,
+    accounts: Map<string, number>,
     categories: Record<string, number>,
     numberFormat: string,
     onBatch?: (
@@ -1228,7 +1271,7 @@ export class YNABImportService {
       ''
     );
     const creditCardAccountIds = new Set(
-      Object.values(accounts).filter((id) =>
+      [...accounts.values()].filter((id) =>
         isCreditAccountType(this.accountService.getAccount(id).Type)
       )
     );
@@ -1269,9 +1312,11 @@ export class YNABImportService {
     sortedUnits.forEach((unit, index) => {
       const rows = unit.kind === 'row' ? [unit.row] : unit.group.rows;
       const row = rows[0];
+      const accountId = rowAccountId(row, accounts);
       if (
         !row.SourceId ||
-        !creditCardAccountIds.has(accounts[row.Account.trim()]) ||
+        accountId === undefined ||
+        !creditCardAccountIds.has(accountId) ||
         rows.some((part) => this.isTransfer(part))
       )
         return;
@@ -1372,7 +1417,7 @@ export class YNABImportService {
 
   private buildTransferIds(
     registerRows: YNABRegisterRow[],
-    accounts: Record<string, number>,
+    accounts: Map<string, number>,
     numberFormat: string
   ): Map<number, string> {
     interface TransferPairingState {
@@ -1385,16 +1430,17 @@ export class YNABImportService {
 
     for (let rowIndex = 0; rowIndex < registerRows.length; rowIndex++) {
       const row = registerRows[rowIndex];
+      if (!isTransferRow(row)) continue;
       const counterpartyName = transferCounterpartyName(row);
-      if (!counterpartyName) continue;
       if (row.TransferID) {
         idsByRowIndex.set(rowIndex, row.TransferID);
         continue;
       }
 
-      const currentAccountName = row.Account.trim();
-      const currentAccountId = accounts[currentAccountName];
-      const counterpartyAccountId = accounts[counterpartyName];
+      const currentAccountId = rowAccountId(row, accounts);
+      const counterpartyAccountId = accounts.get(
+        accountKey(counterpartyName || '', row.SourceTransferAccountId)
+      );
       if (!currentAccountId || !counterpartyAccountId) continue;
 
       const parsedDate = this.parseYNABDate(row.Date);
@@ -1410,8 +1456,10 @@ export class YNABImportService {
       const [firstAccountId, secondAccountId] = [currentAccountId, counterpartyAccountId].sort(
         (left, right) => left - right
       );
-      const splitMarker = parseSplitMarker(row.Memo || '');
-      const normalizedMemo = (splitMarker?.memo ?? row.Memo ?? '').trim().toLocaleLowerCase();
+      const splitMarker = row.SourceId ? null : parseSplitMarker(row.Memo || '');
+      const normalizedMemo = row.SourceId
+        ? ''
+        : (splitMarker?.memo ?? row.Memo ?? '').trim().toLocaleLowerCase();
       const pairingKey = JSON.stringify([
         parsedDate,
         amount,
@@ -1459,14 +1507,14 @@ export class YNABImportService {
   private async importSplitGroup(
     budgetId: number,
     group: YNABSplitGroup,
-    accounts: Record<string, number>,
+    accounts: Map<string, number>,
     categories: Record<string, number>,
     numberFormat: string,
     incomeCategoryId: number,
     uncategorizedCategoryId: number
   ): Promise<boolean> {
     const firstRow = group.rows[0];
-    const accountId = accounts[firstRow.Account.trim()];
+    const accountId = rowAccountId(firstRow, accounts);
     const parsedDate = this.parseYNABDate(firstRow.Date);
     if (!accountId || !parsedDate) return false;
 
@@ -1540,7 +1588,7 @@ export class YNABImportService {
     budgetId: number,
     row: YNABRegisterRow,
     rowIndex: number,
-    accounts: Record<string, number>,
+    accounts: Map<string, number>,
     categories: Record<string, number>,
     numberFormat: string,
     incomeCategoryId: number,
@@ -1551,7 +1599,7 @@ export class YNABImportService {
   ): Promise<boolean> {
     if (!row.Account || !row.Date) return false;
 
-    const accountId = accounts[row.Account.trim()];
+    const accountId = rowAccountId(row, accounts);
     if (!accountId) return false;
 
     const inflow = fromDecimal(
