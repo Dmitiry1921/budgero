@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   setMasterPasswordStatus: vi.fn(),
   writeIntroAcknowledged: vi.fn(),
   importFromApi: vi.fn(),
+  importFromZip: vi.fn(),
   syncBudgetState: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
@@ -53,6 +54,10 @@ vi.mock('@budgero/core/browser', async (importOriginal) => {
     YNABImportService: class {
       importYNABFromApiSnapshotWithSummary(...args: unknown[]) {
         return mocks.importFromApi(...args);
+      }
+
+      importYNABFromZipWithSummary(...args: unknown[]) {
+        return mocks.importFromZip(...args);
       }
     },
   };
@@ -174,3 +179,58 @@ describe('runOnboardingApply YNAB completion gate', () => {
     expect(onComplete).toHaveBeenCalledOnce();
   });
 });
+
+it.each(['', '1.234,567'])(
+  'passes ZIP date order and source format %s independently of display format',
+  async (sourceNumberFormat) => {
+    vi.clearAllMocks();
+    mocks.createSpace.mockResolvedValue({ space_id: 'space-1' });
+    const bytes = new ArrayBuffer(1);
+    mocks.importFromZip.mockResolvedValue({ ...passedResult, verification: undefined });
+    const runtime = {
+      isInitialized: () => true,
+      refreshSpaces: vi.fn().mockResolvedValue(undefined),
+      switchSpace: vi.fn().mockResolvedValue(undefined),
+      getDatabase: () => ({}),
+      finalizeOutOfBandMutation: vi.fn().mockResolvedValue(undefined),
+      services: () => ({ importHistory: { recordImportRun: vi.fn() } }),
+    } as unknown as AppRuntime;
+    await runOnboardingApply(
+      {
+        ...ynabState,
+        ynabApiSnapshot: null,
+        ynabFile: { name: 'synthetic.zip', size: '1 B', bytes },
+        ynabDateOrder: 'month-first',
+        ynabSourceNumberFormat: sourceNumberFormat,
+      },
+      {
+        activePath: 'ynab',
+        runtime,
+        queryClient: {
+          invalidateQueries: vi.fn().mockResolvedValue(undefined),
+          setQueryData: vi.fn(),
+        } as unknown as QueryClient,
+        navigate: vi.fn() as unknown as NavigateFunction,
+        profileId: 'profile-1',
+        setThemeId: vi.fn(),
+        updateOnboardingAsync: vi.fn().mockResolvedValue(undefined),
+        onComplete: vi.fn(),
+        setApplyStatus: vi.fn(),
+        setApplyError: vi.fn(),
+        onYnabProgress: vi.fn(),
+        onYnabResult: vi.fn(),
+        reviewYnabImport: vi.fn(),
+        onYnabImportCancelled: vi.fn(),
+        waitForYnabContinue: async () => true,
+      }
+    );
+    expect(mocks.importFromZip).toHaveBeenCalledWith(
+      bytes,
+      expect.objectContaining({
+        dateOrder: 'month-first',
+        sourceNumberFormat,
+        numberFormat: '$1,096.56',
+      })
+    );
+  }
+);

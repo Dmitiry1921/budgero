@@ -4,7 +4,11 @@
 
 import { formatDateISO } from '@shared/lib/date-utils';
 import { AccountTypeEnum } from '@entities/account/model/accountTypes';
-import type { YNABApiPlanSnapshot, YNABImportPreview } from '@budgero/core/browser';
+import type {
+  YNABApiPlanSnapshot,
+  YNABImportConfig,
+  YNABImportPreview,
+} from '@budgero/core/browser';
 
 export type StartMode = 'fresh' | 'ynab';
 
@@ -426,6 +430,8 @@ export interface OnboardingFormState {
   ynabFile: { name: string; size: string; bytes: ArrayBuffer } | null;
   ynabApiSnapshot: YNABApiPlanSnapshot | null;
   ynabPreview: YNABImportPreview | null;
+  ynabDateOrder?: YNABImportConfig['dateOrder'];
+  ynabSourceNumberFormat?: string;
   /** Selected HEARD_OPTIONS id, or '' if untouched/skipped. */
   heardSource: string;
   /** Free text shown when heardSource === 'other'. */

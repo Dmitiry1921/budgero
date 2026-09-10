@@ -11,7 +11,11 @@ export interface YNABImportConfig {
   budgetName: string;
   currency: string;
   numberFormat: string;
+  /** ZIP source number format; an empty string detects separators from the source amounts. */
+  sourceNumberFormat?: string;
   badgeIcon: string;
+  /** Explicit source date order for ZIP exports whose numeric dates are ambiguous. */
+  dateOrder?: 'day-first' | 'month-first';
   /**
    * Called at import stage and batch boundaries. Returning a promise applies
    * backpressure, allowing browser clients to paint before work continues.
@@ -55,6 +59,8 @@ export interface YNABSplitTransactionSummary {
 }
 
 export interface YNABImportPreview {
+  /** True when the ZIP needs a date-order choice to distinguish day and month. */
+  dateOrderAmbiguous?: boolean;
   registerRowCount: number;
   accountCount: number;
   categoryCount: number;
@@ -167,7 +173,7 @@ export interface YNABApiPlanSummary {
   last_modified_on: string;
   first_month: string;
   last_month: string;
-  currency_format: YNABApiCurrencyFormat;
+  currency_format: YNABApiCurrencyFormat | null;
 }
 
 export interface YNABApiAccount {
@@ -278,7 +284,7 @@ export interface YNABApiPlanSnapshot {
 
 export interface YNABApiMoneyMovement {
   id: string;
-  month: string;
+  month?: string | null;
   from_category_id: string | null;
   to_category_id: string | null;
   amount: number;
@@ -302,6 +308,9 @@ export interface YNABImportAccountSpec {
   /** Payment category inferred from categorized transfers into this debt account. */
   linkedCategoryGroup?: string;
   linkedCategory?: string;
+  linkedYNABCategoryId?: string;
+  /** Unambiguous source credit payment category, when one can be identified. */
+  creditPaymentYNABCategoryId?: string;
 }
 
 export interface YNABImportReadyToAssignSpec {
@@ -311,6 +320,7 @@ export interface YNABImportReadyToAssignSpec {
 
 export interface YNABImportCategoryMonthSpec {
   month: string;
+  ynabCategoryId?: string;
   categoryGroup: string;
   category: string;
   expectedAssigned: number;
@@ -339,6 +349,12 @@ export interface YNABRegisterRow {
   SourceTransferAccountId?: string | null;
   /** An API split child belongs to SourceId regardless of its memo or payee. */
   SourceSubtransactionId?: string;
+  SourceParentMemo?: string;
+  SourceParentPayee?: string;
+  SourceCategoryId?: string;
+  SourceCategoryGroupId?: string;
+  SourceCategoryInternal?: boolean;
+  SourceCategoryGroupInternal?: boolean;
   /** Preserve a source-system transfer that intentionally did not move RTA. */
   ExcludeFromReadyToAssign?: boolean;
 }
@@ -351,6 +367,10 @@ export interface YNABBudgetRow {
   Assigned: string;
   Activity: string;
   Available: string;
+  SourceCategoryId?: string;
+  SourceCategoryGroupId?: string;
+  SourceCategoryInternal?: boolean;
+  SourceCategoryGroupInternal?: boolean;
 }
 
 // CSV/PDF Import Types

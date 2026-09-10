@@ -3,6 +3,7 @@ import {
   NodeSqlJsAdapter,
   YNABApiClient,
   YNABImportService,
+  TransactionService,
   mapYNABAccountType,
   normalizeYNABApiSnapshot,
   normalizeYNABMilliunitPrecision,
@@ -950,6 +951,159 @@ describe('YNAB API import', () => {
           )
           .all(result.budgetId)
       ).toEqual([{ Legs: 2, Accounts: 2, Net: 0 }]);
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('isolates transfer groups when the same YNAB plan is imported twice', async () => {
+    const adapter = await NodeSqlJsAdapter.create();
+    try {
+      const snapshot = snapshotFixture();
+      snapshot.plan.subtransactions[0].transfer_transaction_id = snapshot.plan.transactions[2].id;
+      snapshot.plan.transactions[2].transfer_transaction_id = snapshot.plan.transactions[1].id;
+      const config = {
+        spaceId: SPACE_ID,
+        budgetName: 'Repeated import',
+        currency: 'USD',
+        numberFormat: '123,456.78',
+        badgeIcon: 'HelpCircle',
+      };
+      const importer = new YNABImportService(adapter);
+      const first = await importer.importYNABFromApiSnapshotWithSummary(snapshot, config);
+      const second = await importer.importYNABFromApiSnapshotWithSummary(snapshot, config);
+      const secondRows = adapter
+        .prepare('SELECT * FROM transactions WHERE BudgetID = ? ORDER BY ID')
+        .all(second.budgetId);
+      const secondAccounts = adapter
+        .prepare('SELECT * FROM accounts WHERE BudgetID = ? ORDER BY ID')
+        .all(second.budgetId);
+      const firstTransfer = adapter
+        .prepare("SELECT ID FROM transactions WHERE BudgetID = ? AND TransferID <> '' LIMIT 1")
+        .get(first.budgetId) as { ID: number };
+
+      new TransactionService(adapter).deleteTransaction(firstTransfer.ID);
+
+      expect(
+        adapter
+          .prepare('SELECT * FROM transactions WHERE BudgetID = ? ORDER BY ID')
+          .all(second.budgetId)
+      ).toEqual(secondRows);
+      expect(
+        adapter
+          .prepare('SELECT * FROM accounts WHERE BudgetID = ? ORDER BY ID')
+          .all(second.budgetId)
+      ).toEqual(secondAccounts);
+      expect(
+        adapter
+          .prepare('SELECT COUNT(*) AS Count FROM transactions WHERE BudgetID = ?')
+          .get(first.budgetId)
+      ).toEqual({ Count: 3 });
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('preserves API split parent details, transfer notes, and reconciled history', async () => {
+    const adapter = await NodeSqlJsAdapter.create();
+    try {
+      const snapshot = snapshotFixture();
+      snapshot.plan.transactions[0].memo = 'Opening amount checked against statement';
+      snapshot.plan.transactions[0].cleared = 'reconciled';
+      snapshot.plan.transactions[2].memo = 'Savings for the deposit';
+      snapshot.plan.transactions[2].cleared = 'reconciled';
+      snapshot.plan.transactions[3].cleared = 'reconciled';
+      const result = await new YNABImportService(adapter).importYNABFromApiSnapshotWithSummary(
+        snapshot,
+        {
+          spaceId: SPACE_ID,
+          budgetName: 'Preserved source details',
+          currency: 'USD',
+          numberFormat: '123,456.78',
+          badgeIcon: 'HelpCircle',
+        }
+      );
+      expect(result.verification?.status).toBe('passed');
+      expect(
+        adapter
+          .prepare(
+            `
+        SELECT t.Memo, t.Reconciled FROM transactions t
+        JOIN accounts a ON a.ID = t.AccountID
+        WHERE t.BudgetID = ? AND json_extract(a.Metadata, '$.ynab_account_id') = 'account-savings'
+      `
+          )
+          .get(result.budgetId)
+      ).toEqual({ Memo: 'Savings for the deposit', Reconciled: 1 });
+      expect(
+        adapter
+          .prepare(
+            `
+        SELECT Memo, Reconciled FROM transactions WHERE BudgetID = ? AND Date = '2026-09-01'
+      `
+          )
+          .get(result.budgetId)
+      ).toEqual({ Memo: 'Opening amount checked against statement', Reconciled: 1 });
+      expect(
+        adapter
+          .prepare(
+            `
+        SELECT Memo, Payee, Reconciled FROM transactions WHERE BudgetID = ? AND Date = '2026-09-03'
+      `
+          )
+          .get(result.budgetId)
+      ).toEqual({ Memo: 'Purchase with refund', Payee: 'Store', Reconciled: 1 });
+      expect(
+        adapter
+          .prepare(
+            `
+        SELECT Memo, Reconciled FROM transactions WHERE BudgetID = ? AND OutflowNative = 20000
+      `
+          )
+          .get(result.budgetId)
+      ).toEqual({ Memo: 'Groceries\nYNAB split memo: Transfer plus groceries', Reconciled: 0 });
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('retains a single-child API split and its parent-only note', async () => {
+    const adapter = await NodeSqlJsAdapter.create();
+    try {
+      const snapshot = snapshotFixture();
+      snapshot.plan.subtransactions = snapshot.plan.subtransactions.filter(
+        (child) => child.id !== 'sub-refund'
+      );
+      snapshot.plan.subtransactions.find((child) => child.id === 'sub-purchase')!.amount = -75_000;
+      const result = await new YNABImportService(adapter).importYNABFromApiSnapshotWithSummary(
+        snapshot,
+        {
+          spaceId: SPACE_ID,
+          budgetName: 'Single-child split',
+          currency: 'USD',
+          numberFormat: '123,456.78',
+          badgeIcon: 'HelpCircle',
+        }
+      );
+      expect(result.summary).toMatchObject({ sourceRowsVerified: 5, splitTransactionsImported: 1 });
+      expect(
+        adapter
+          .prepare(
+            `
+        SELECT t.Memo AS ParentMemo, t.Payee AS ParentPayee, s.Memo AS ChildMemo, s.OutflowNative
+        FROM transaction_splits s JOIN transactions t ON t.ID = s.TransactionID
+        WHERE t.BudgetID = ?
+      `
+          )
+          .all(result.budgetId)
+      ).toEqual([
+        {
+          ParentMemo: 'Purchase with refund',
+          ParentPayee: 'Store',
+          ChildMemo: 'Purchase',
+          OutflowNative: 75_000,
+        },
+      ]);
     } finally {
       adapter.close();
     }

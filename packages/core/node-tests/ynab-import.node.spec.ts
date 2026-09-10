@@ -533,6 +533,7 @@ describe('YNABImportService — migration edge cases', () => {
     const preview = await YNABImportService.inspectYNABZip(zip);
 
     expect(preview).toEqual({
+      dateOrderAmbiguous: false,
       registerRowCount: 4,
       accountCount: 1,
       categoryCount: 4,
@@ -703,7 +704,7 @@ describe('YNABImportService — migration edge cases', () => {
       expect(transferRows).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            Memo: 'Transfer from Checking to Savings',
+            Memo: 'Move to savings',
             Payee: null,
             OutflowNative: 20_000,
             Category: 'Transfers',

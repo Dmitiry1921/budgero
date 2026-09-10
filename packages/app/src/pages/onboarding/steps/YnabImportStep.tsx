@@ -3,6 +3,7 @@ import type { YNABApiPlanSnapshot, YNABApiPlanSummary } from '@budgero/core/brow
 import { YNABApiClient } from '@budgero/core/browser';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shared/ui/select';
 import { YnabPatHelpPopover } from '@features/budget-management/ui/create-budget-form/YnabPatHelpPopover';
+import { YnabDateOrderChoice } from '@features/budget-management/ui/create-budget-form/YnabDateOrderChoice';
 import { Title, type StepProps } from './shared';
 
 interface YnabStepProps extends StepProps {
@@ -30,6 +31,7 @@ export const YnabImportStep: React.FC<YnabStepProps> = ({
   const [isConnecting, setIsConnecting] = React.useState(false);
   const [connectionError, setConnectionError] = React.useState('');
   const hasSource = Boolean(file || apiSnapshot);
+  const needsDateOrder = Boolean(file && preview?.dateOrderAmbiguous && !state.ynabDateOrder);
 
   const loadPlan = async (planId: string, accessToken = token) => {
     if (!planId || !accessToken.trim()) return;
@@ -68,7 +70,13 @@ export const YnabImportStep: React.FC<YnabStepProps> = ({
 
   const switchSource = (mode: 'api' | 'zip') => {
     setSourceMode(mode);
-    set({ ynabFile: null, ynabApiSnapshot: null, ynabPreview: null });
+    set({
+      ynabFile: null,
+      ynabApiSnapshot: null,
+      ynabPreview: null,
+      ynabDateOrder: undefined,
+      ynabSourceNumberFormat: undefined,
+    });
   };
 
   return (
@@ -294,12 +302,12 @@ export const YnabImportStep: React.FC<YnabStepProps> = ({
                 {file?.name || apiSnapshot?.plan.name}
               </div>
               <div style={{ fontSize: 10, color: '#393939' }}>
-                {file ? `${file.size} · ` : 'Connected through YNAB API · '}ready to import on
-                finish
+                {file ? `${file.size} · ` : 'Connected through YNAB API · '}
+                {needsDateOrder ? 'select the date format below' : 'ready to import on finish'}
               </div>
             </div>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#2f7d31', letterSpacing: 1 }}>
-              ✓ READY
+              {needsDateOrder ? 'DATE FORMAT' : '✓ READY'}
             </div>
           </div>
           {preview && (
@@ -324,6 +332,38 @@ export const YnabImportStep: React.FC<YnabStepProps> = ({
                 {preview.registerRowCount.toLocaleString()} register{' '}
                 {preview.registerRowCount === 1 ? 'row' : 'rows'}
               </div>
+
+              {file && (
+                <label htmlFor="onboarding-ynab-source-format" style={{ display: 'grid', gap: 5 }}>
+                  <span style={{ fontWeight: 700 }}>Number format in YNAB</span>
+                  <select
+                    id="onboarding-ynab-source-format"
+                    value={state.ynabSourceNumberFormat ?? ''}
+                    onChange={(event) => set({ ynabSourceNumberFormat: event.target.value })}
+                    style={{
+                      padding: 8,
+                      border: '1px solid #141414',
+                      background: '#fffdf8',
+                      color: '#141414',
+                    }}
+                  >
+                    <option value="">Detect from file</option>
+                    <option value="1,234.567">Decimal point (1,234.567)</option>
+                    <option value="1.234,567">Decimal comma (1.234,567)</option>
+                  </select>
+                  <span>
+                    Choose the separator explicitly if your amounts use three decimal places.
+                  </span>
+                </label>
+              )}
+
+              {file && preview.dateOrderAmbiguous && (
+                <YnabDateOrderChoice
+                  value={state.ynabDateOrder}
+                  onChange={(ynabDateOrder) => set({ ynabDateOrder })}
+                  disabled={isInspecting}
+                />
+              )}
 
               {file && (
                 <div

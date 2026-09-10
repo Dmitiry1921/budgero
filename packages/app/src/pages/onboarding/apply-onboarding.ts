@@ -265,7 +265,13 @@ export async function runOnboardingApply(
         budgetName: state.budgetName.trim() || 'My budget',
         currency: state.currency,
         numberFormat: '$1,096.56',
+        ...(!state.ynabApiSnapshot
+          ? { sourceNumberFormat: state.ynabSourceNumberFormat ?? '' }
+          : {}),
         badgeIcon: '💰',
+        ...(!state.ynabApiSnapshot && state.ynabDateOrder
+          ? { dateOrder: state.ynabDateOrder }
+          : {}),
         onProgress: onYnabProgress,
       };
       let importResult: YNABImportResult;

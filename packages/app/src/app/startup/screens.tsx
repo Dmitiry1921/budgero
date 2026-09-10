@@ -758,7 +758,10 @@ export function BudgetRequiredScreen({
               variant="ghost"
               size="sm"
               className="shrink-0 text-muted-foreground"
-              onClick={() => setSelectedSource(null)}
+              disabled={isBudgetImporting}
+              onClick={() => {
+                if (!useUiStore.getState().isBudgetImporting) setSelectedSource(null);
+              }}
             >
               Back
             </Button>

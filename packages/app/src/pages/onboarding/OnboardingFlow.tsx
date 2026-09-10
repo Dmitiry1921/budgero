@@ -185,7 +185,12 @@ const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) => {
         return pw.length >= 8 && pw === state.passwordConfirm;
       }
       case 'ynab_import':
-        return Boolean(state.ynabFile || state.ynabApiSnapshot);
+        return (
+          Boolean(state.ynabFile || state.ynabApiSnapshot) &&
+          (!state.ynabFile ||
+            !state.ynabPreview?.dateOrderAmbiguous ||
+            Boolean(state.ynabDateOrder))
+        );
       default:
         return true;
     }
@@ -201,7 +206,13 @@ const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) => {
   const handleYnabFile = useCallback(
     async (file: File) => {
       setIsInspectingYnab(true);
-      set({ ynabFile: null, ynabApiSnapshot: null, ynabPreview: null });
+      set({
+        ynabFile: null,
+        ynabApiSnapshot: null,
+        ynabPreview: null,
+        ynabDateOrder: undefined,
+        ynabSourceNumberFormat: undefined,
+      });
       try {
         const bytes = await file.arrayBuffer();
         const preview = await YNABImportService.inspectYNABZip(bytes);
@@ -228,13 +239,15 @@ const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) => {
     (snapshot: YNABApiPlanSnapshot) => {
       set({
         ynabFile: null,
+        ynabDateOrder: undefined,
+        ynabSourceNumberFormat: undefined,
         ynabApiSnapshot: snapshot,
         ynabPreview: YNABImportService.inspectYNABApiSnapshot(snapshot),
         budgetName: state.budgetName || snapshot.plan.name,
-        currency: snapshot.plan.currency_format.iso_code,
+        currency: snapshot.plan.currency_format?.iso_code ?? state.currency,
       });
     },
-    [set, state.budgetName]
+    [set, state.budgetName, state.currency]
   );
 
   const handleYnabProgress = useCallback(async (update: YNABImportProgressUpdate) => {

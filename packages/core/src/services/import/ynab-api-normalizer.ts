@@ -90,7 +90,7 @@ function transferIdFor(
 export function normalizeYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): NormalizedYNABApiImport {
   const { plan } = snapshot;
   const normalizeAmount = (value: number) =>
-    normalizeYNABMilliunitPrecision(value, plan.currency_format.decimal_digits);
+    normalizeYNABMilliunitPrecision(value, plan.currency_format?.decimal_digits ?? 3);
   const accountsById = new Map(plan.accounts.map((account) => [account.id, account]));
   const groupsById = new Map(plan.category_groups.map((group) => [group.id, group]));
   const categoriesById = new Map(plan.categories.map((category) => [category.id, category]));
@@ -119,6 +119,14 @@ export function normalizeYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): Normali
       CategoryPath: category ? `${group?.name || 'Imported from YNAB'}: ${category.name}` : '',
       CategoryGroup: category ? group?.name || 'Imported from YNAB' : '',
       Category: category?.name || '',
+      ...(category
+        ? {
+            SourceCategoryId: category.id,
+            SourceCategoryGroupId: category.category_group_id,
+            SourceCategoryInternal: category.internal,
+            SourceCategoryGroupInternal: group?.internal ?? false,
+          }
+        : {}),
     };
   };
 
@@ -199,6 +207,8 @@ export function normalizeYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): Normali
           SourceId: transaction.id,
           SourceAccountId: account.id,
           SourceSubtransactionId: child.id,
+          SourceParentMemo: transaction.memo || '',
+          SourceParentPayee: transactionPayee(transaction.payee_id, null),
           SourceTransferAccountId: child.transfer_account_id,
           TransferID: splitTransferIds.get(child.id),
           ExcludeFromReadyToAssign: isCategorylessBudgetBoundaryTransfer(
@@ -259,9 +269,10 @@ export function normalizeYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): Normali
       representedCategoryIds.add(category.id);
 
       const group = groupsById.get(category.category_group_id);
-      if (!category.internal) {
+      if (!category.internal || group?.name === 'Credit Card Payments') {
         categoryMonthSpecs.push({
           month: month.month.slice(0, 7),
+          ynabCategoryId: category.id,
           categoryGroup: group?.name || 'Imported from YNAB',
           category: category.name,
           expectedAssigned: normalizeAmount(category.budgeted || 0),
@@ -291,7 +302,12 @@ export function normalizeYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): Normali
     const movementNet = new Map<string, number>();
     const monthsWithMovements = new Set<string>();
     const activeMovements = snapshot.moneyMovements.filter((movement) => !movement.deleted);
+    // YNAB permits movements without a month. Their assignments remain in
+    // the monthly category data, but we cannot attribute these auxiliary
+    // records to a month or claim that any month's movement total is complete.
+    const hasUnknownMovementMonth = activeMovements.some((movement) => !movement.month);
     for (const movement of activeMovements) {
+      if (!movement.month) continue;
       const month = movement.month.slice(0, 7);
       monthsWithMovements.add(month);
       const amount = normalizeAmount(movement.amount);
@@ -309,7 +325,7 @@ export function normalizeYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): Normali
     const mismatches = categoryMonthSpecs.flatMap((spec, index) => {
       // YNAB may omit historical Money Movements. A month without active
       // records is unverifiable, not evidence that every assignment was zero.
-      if (!monthsWithMovements.has(spec.month)) return [];
+      if (hasUnknownMovementMonth || !monthsWithMovements.has(spec.month)) return [];
       const actual = movementNet.get(`${spec.month}::${categoryMonthIds[index]}`) || 0;
       if (actual === spec.expectedAssigned) {
         verifiedAssignments++;
@@ -376,6 +392,21 @@ export function normalizeYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): Normali
         const linkedGroup = linkedCategory
           ? groupsById.get(linkedCategory.category_group_id)
           : undefined;
+        // The public API does not expose the account/payment-category link.
+        // A unique name match is usable; never collapse ambiguous source IDs.
+        const creditPaymentCandidates = plan.categories.filter(
+          (category) =>
+            !category.deleted &&
+            category.name === account.name &&
+            groupsById.get(category.category_group_id)?.internal === true &&
+            groupsById.get(category.category_group_id)?.name === 'Credit Card Payments'
+        );
+        const sameNamedCreditAccounts = plan.accounts.filter(
+          (candidate) =>
+            !candidate.deleted &&
+            candidate.name === account.name &&
+            (candidate.type === 'creditCard' || candidate.type === 'lineOfCredit')
+        );
         return {
           name: account.name,
           type: mapYNABAccountType(account.type),
@@ -391,7 +422,11 @@ export function normalizeYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): Normali
             ? {
                 linkedCategoryGroup: linkedGroup.name,
                 linkedCategory: linkedCategory.name,
+                linkedYNABCategoryId: linkedCategory.id,
               }
+            : {}),
+          ...(creditPaymentCandidates.length === 1 && sameNamedCreditAccounts.length === 1
+            ? { creditPaymentYNABCategoryId: creditPaymentCandidates[0].id }
             : {}),
         };
       }),

@@ -206,7 +206,12 @@ export class AccountService {
       // Per-card payment category (e.g., "Chase CC"), named after the account.
       // Reuses a same-named category already in the group (e.g. one imported
       // from YNAB) instead of creating a duplicate.
-      ccPaymentCategoryId = this.reattachOrCreateCategory(budgetId, 'Credit Card Payments', name);
+      const requestedPaymentCategoryId = (metadata || {}).cc_payment_category_id;
+      if (this.categoryExistsInBudget(budgetId, requestedPaymentCategoryId)) {
+        ccPaymentCategoryId = requestedPaymentCategoryId as number;
+      } else {
+        ccPaymentCategoryId = this.reattachOrCreateCategory(budgetId, 'Credit Card Payments', name);
+      }
 
       const updatedMetadata = {
         ...(metadata || {}),

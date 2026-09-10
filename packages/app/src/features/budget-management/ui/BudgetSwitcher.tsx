@@ -76,7 +76,13 @@ export function BudgetSwitcher() {
       />
 
       {canManageBudgets && (
-        <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+        <Dialog
+          open={createDialogOpen}
+          onOpenChange={(open) => {
+            if (!open && useUiStore.getState().isBudgetImporting) return;
+            setCreateDialogOpen(open);
+          }}
+        >
           <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-x-hidden overflow-y-auto p-2 sm:p-4">
             <DialogTitle className="sr-only">Create New Budget</DialogTitle>
             <DialogDescription className="sr-only">

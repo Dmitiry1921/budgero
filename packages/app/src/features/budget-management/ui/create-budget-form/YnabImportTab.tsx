@@ -3,7 +3,11 @@
  */
 
 import type { ChangeEvent, RefObject } from 'react';
-import type { YNABApiPlanSummary, YNABImportPreview } from '@budgero/core/browser';
+import type {
+  YNABApiPlanSummary,
+  YNABImportConfig,
+  YNABImportPreview,
+} from '@budgero/core/browser';
 import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
 import { Label } from '@shared/ui/label';
@@ -15,6 +19,7 @@ import { IconPicker } from '@features/budget-management/ui/IconPicker';
 import { FormatSelector } from '@features/budget-management/ui/FormatSelector';
 import { YnabExportGuide } from './YnabExportGuide';
 import { YnabPatHelpPopover } from './YnabPatHelpPopover';
+import { YnabDateOrderChoice } from './YnabDateOrderChoice';
 
 interface YnabImportTabProps {
   sourceMode: 'api' | 'zip';
@@ -38,6 +43,8 @@ interface YnabImportTabProps {
   file: File | null;
   onFileChange: (e: ChangeEvent<HTMLInputElement>) => void;
   preview: YNABImportPreview | null;
+  dateOrder?: YNABImportConfig['dateOrder'];
+  onDateOrderChange: (value: NonNullable<YNABImportConfig['dateOrder']>) => void;
   isInspecting: boolean;
   isImporting: boolean;
   onReset: () => void;
@@ -66,6 +73,8 @@ export function YnabImportTab({
   file,
   onFileChange,
   preview,
+  dateOrder,
+  onDateOrderChange,
   isInspecting,
   isImporting,
   onReset,
@@ -74,6 +83,7 @@ export function YnabImportTab({
   const canImport =
     Boolean(budgetName.trim()) &&
     Boolean(preview) &&
+    (sourceMode !== 'zip' || !preview?.dateOrderAmbiguous || Boolean(dateOrder)) &&
     (sourceMode === 'api' ? Boolean(selectedPlanId) : Boolean(file));
 
   return (
@@ -256,6 +266,14 @@ export function YnabImportTab({
                 {preview.registerRowCount.toLocaleString()} register{' '}
                 {preview.registerRowCount === 1 ? 'row' : 'rows'}
               </p>
+
+              {preview.dateOrderAmbiguous && (
+                <YnabDateOrderChoice
+                  value={dateOrder}
+                  onChange={onDateOrderChange}
+                  disabled={isImporting || isInspecting}
+                />
+              )}
 
               <div className="flex items-start gap-2 rounded-md border border-amber-300/70 bg-amber-50 p-2.5 text-amber-950 dark:border-amber-900/70 dark:bg-amber-950/30 dark:text-amber-100">
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />

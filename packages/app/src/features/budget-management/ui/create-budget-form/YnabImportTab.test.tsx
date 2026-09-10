@@ -64,6 +64,7 @@ describe('YnabImportTab', () => {
         fileInputRef={React.createRef<HTMLInputElement>()}
         file={new File(['zip'], 'edge-cases.zip', { type: 'application/zip' })}
         onFileChange={vi.fn()}
+        onDateOrderChange={vi.fn()}
         preview={preview}
         isInspecting={false}
         isImporting={false}
@@ -77,6 +78,8 @@ describe('YnabImportTab', () => {
     expect(screen.getByText(/Archive › Missing From Plan/)).toBeInTheDocument();
     expect(screen.getByText(/as split transactions automatically/)).toBeInTheDocument();
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Dates in this export' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Import' })).toBeEnabled();
   });
 
   it('offers a direct API connection without persisting the token', () => {
@@ -120,6 +123,7 @@ describe('YnabImportTab', () => {
         fileInputRef={React.createRef<HTMLInputElement>()}
         file={null}
         onFileChange={vi.fn()}
+        onDateOrderChange={vi.fn()}
         preview={preview}
         isInspecting={false}
         isImporting={false}
@@ -144,4 +148,53 @@ describe('YnabImportTab', () => {
       'https://app.ynab.com/settings/developer'
     );
   });
+});
+
+describe('ambiguous ZIP date choice', () => {
+  it.each(['Month first', 'Day first'])(
+    'requires an explicit %s choice before enabling Import',
+    (label) => {
+      const onImport = vi.fn();
+      const props: React.ComponentProps<typeof YnabImportTab> = {
+        sourceMode: 'zip',
+        onSourceModeChange: vi.fn(),
+        personalAccessToken: '',
+        onPersonalAccessTokenChange: vi.fn(),
+        plans: [],
+        selectedPlanId: '',
+        onSelectedPlanChange: vi.fn(),
+        isConnecting: false,
+        onConnect: vi.fn(),
+        budgetName: 'Synthetic dates',
+        onBudgetNameChange: vi.fn(),
+        currency: 'USD',
+        onCurrencyChange: vi.fn(),
+        numberFormat: '$1,096.56',
+        onNumberFormatChange: vi.fn(),
+        importBadgeIcon: 'Wallet',
+        onImportBadgeIconChange: vi.fn(),
+        fileInputRef: React.createRef<HTMLInputElement>(),
+        file: new File(['synthetic'], 'dates.zip'),
+        onFileChange: vi.fn(),
+        preview: { ...preview, dateOrderAmbiguous: true },
+        onDateOrderChange: vi.fn(),
+        isInspecting: false,
+        isImporting: false,
+        onReset: vi.fn(),
+        onImport,
+      };
+      function Form() {
+        const [dateOrder, setDateOrder] =
+          React.useState<React.ComponentProps<typeof YnabImportTab>['dateOrder']>();
+        return <YnabImportTab {...props} dateOrder={dateOrder} onDateOrderChange={setDateOrder} />;
+      }
+      render(<Form />);
+      const button = screen.getByRole('button', { name: 'Import' });
+      expect(button).toBeDisabled();
+      fireEvent.click(screen.getByRole('radio', { name: new RegExp(label) }));
+      expect(button).toBeEnabled();
+      fireEvent.click(button);
+      expect(onImport).toHaveBeenCalledOnce();
+    }
+  );
 });

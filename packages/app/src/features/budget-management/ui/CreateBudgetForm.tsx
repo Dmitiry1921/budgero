@@ -80,6 +80,7 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [isInspectingYnab, setIsInspectingYnab] = useState(false);
   const [ynabPreview, setYnabPreview] = useState<YNABImportPreview | null>(null);
+  const [ynabDateOrder, setYnabDateOrder] = useState<YNABImportConfig['dateOrder']>();
   const [ynabSourceMode, setYnabSourceMode] = useState<'api' | 'zip'>('api');
   const [ynabPersonalAccessToken, setYnabPersonalAccessToken] = useState('');
   const [ynabPlans, setYnabPlans] = useState<YNABApiPlanSummary[]>([]);
@@ -92,6 +93,11 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
   const [ynabImportResult, setYnabImportResult] = useState<YNABImportResult | null>(null);
   const [isFinalizingYnab, setIsFinalizingYnab] = useState(false);
   const pendingYnabBudgetIdRef = useRef<number | null>(null);
+  const ynabImportRunRef = useRef<{
+    cancelled: boolean;
+    saving: boolean;
+    deleteBudget: (budgetId: number) => void;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Budgero backup import state
@@ -106,10 +112,15 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
 
   useEffect(
     () => () => {
+      const run = ynabImportRunRef.current;
+      if (run) run.cancelled = true;
+      // Once saving starts, finalization owns the accepted budget. Publishing
+      // its state can itself unmount this form during first-budget onboarding.
+      if (run?.saving) return;
       const pendingBudgetId = pendingYnabBudgetIdRef.current;
       if (pendingBudgetId === null) return;
       try {
-        runtime.services().budgets.deleteBudget(pendingBudgetId);
+        run?.deleteBudget(pendingBudgetId);
       } catch (error) {
         console.warn('[CreateBudgetForm] Failed to remove an unaccepted YNAB import', error);
       }
@@ -123,6 +134,7 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
     setBudgetName('');
     setFile(null);
     setYnabPreview(null);
+    setYnabDateOrder(undefined);
     setYnabPersonalAccessToken('');
     setYnabPlans([]);
     setSelectedYnabPlanId('');
@@ -173,6 +185,7 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
 
     setFile(selectedFile);
     setYnabPreview(null);
+    setYnabDateOrder(undefined);
     setIsInspectingYnab(true);
 
     try {
@@ -199,8 +212,10 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
       setYnabApiSnapshot(snapshot);
       setYnabPreview(YNABImportService.inspectYNABApiSnapshot(snapshot));
       setBudgetName(snapshot.plan.name);
-      setCurrency(snapshot.plan.currency_format.iso_code);
-      setNumberFormat(snapshot.plan.currency_format.example_format);
+      if (snapshot.plan.currency_format) {
+        setCurrency(snapshot.plan.currency_format.iso_code);
+        setNumberFormat(snapshot.plan.currency_format.example_format);
+      }
     } catch (error) {
       toast.error(getErrorMessage(error, 'Could not read that YNAB plan.'));
     } finally {
@@ -224,8 +239,10 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
       setYnabApiSnapshot(snapshot);
       setYnabPreview(YNABImportService.inspectYNABApiSnapshot(snapshot));
       setBudgetName(snapshot.plan.name);
-      setCurrency(snapshot.plan.currency_format.iso_code);
-      setNumberFormat(snapshot.plan.currency_format.example_format);
+      if (snapshot.plan.currency_format) {
+        setCurrency(snapshot.plan.currency_format.iso_code);
+        setNumberFormat(snapshot.plan.currency_format.example_format);
+      }
     } catch (error) {
       setYnabPlans([]);
       setSelectedYnabPlanId('');
@@ -239,7 +256,10 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
     const activeSpaceId = runtime.getActiveSpaceId();
     if (!activeSpaceId) throw new Error('No active workspace selected');
 
+    const run = ynabImportRunRef.current;
+    if (!run || run.cancelled) return;
     setIsFinalizingYnab(true);
+    setIsBudgetImporting(true);
     setYnabImportUpdates((current) => [
       ...current,
       {
@@ -251,9 +271,10 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
           : 'Saving imported budget',
       },
     ]);
-    await yieldAfterPaint();
-
     try {
+      await yieldAfterPaint();
+      if (run.cancelled) return;
+      run.saving = true;
       runtime.services().importHistory.recordImportRun({
         budgetId: result.budgetId,
         sourceType: ynabSourceMode === 'api' ? 'ynab-api' : 'ynab-zip',
@@ -289,6 +310,9 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
         // The accepted import is already saved locally; a later sync can retry.
       }
 
+      // Release cleanup ownership before publishing the budget. Updating the
+      // startup budget gate can unmount this form immediately.
+      pendingYnabBudgetIdRef.current = null;
       syncBudgetStateFromRuntime({
         runtime,
         queryClient,
@@ -343,7 +367,6 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
         console.warn('[CreateBudgetForm] Failed to mark onboarding complete after import', error);
       }
 
-      pendingYnabBudgetIdRef.current = null;
       setYnabImportUpdates((current) => [
         ...current,
         {
@@ -358,7 +381,13 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
       ]);
       setYnabImportResult(result);
     } finally {
+      run.saving = false;
+      if (run.cancelled && pendingYnabBudgetIdRef.current !== null) {
+        run.deleteBudget(pendingYnabBudgetIdRef.current);
+        pendingYnabBudgetIdRef.current = null;
+      }
       setIsFinalizingYnab(false);
+      setIsBudgetImporting(false);
     }
   };
 
@@ -373,7 +402,20 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
       return;
     }
 
+    if (ynabSourceMode === 'zip' && ynabPreview?.dateOrderAmbiguous && !ynabDateOrder) {
+      toast.error('Select the date format used in your YNAB export.');
+      return;
+    }
+    if (ynabImportRunRef.current?.saving || isImporting) return;
+    const budgetService = runtime.services().budgets;
+    const run = {
+      cancelled: false,
+      saving: false,
+      deleteBudget: (budgetId: number) => budgetService.deleteBudget(budgetId),
+    };
+    ynabImportRunRef.current = run;
     setIsImporting(true);
+    setIsBudgetImporting(true);
     setYnabImportView('status');
     setYnabImportUpdates([]);
     setYnabImportError(null);
@@ -398,9 +440,14 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
         currency,
         numberFormat,
         badgeIcon: importBadgeIcon,
+        ...(ynabSourceMode === 'zip' && ynabDateOrder ? { dateOrder: ynabDateOrder } : {}),
         onProgress: async (update) => {
+          if (run.cancelled) throw new Error('YNAB import cancelled');
           setYnabImportUpdates((current) => [...current, update]);
           await yieldAfterPaint();
+          // Throwing at a progress boundary lets the importer roll back its
+          // own database if navigation unmounted the form during a batch.
+          if (run.cancelled) throw new Error('YNAB import cancelled');
         },
       };
 
@@ -411,6 +458,10 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
               await (file as File).arrayBuffer(),
               config
             );
+      if (run.cancelled) {
+        run.deleteBudget(result.budgetId);
+        return;
+      }
       pendingYnabBudgetIdRef.current = result.budgetId;
       setYnabImportResult(result);
       if (result.verification?.status === 'warning') {
@@ -429,12 +480,14 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
 
       await finalizeYnabImport(result, false);
     } catch (err) {
+      if (run.cancelled) return;
       console.error('Import failed:', err);
       setYnabImportError(
         getErrorMessage(err, 'Import failed. Please check your source and try again.')
       );
     } finally {
       setIsImporting(false);
+      setIsBudgetImporting(false);
     }
   };
 
@@ -452,7 +505,7 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
   const discardPendingYnabImport = async () => {
     const pendingBudgetId = pendingYnabBudgetIdRef.current;
     if (pendingBudgetId !== null) {
-      runtime.services().budgets.deleteBudget(pendingBudgetId);
+      ynabImportRunRef.current?.deleteBudget(pendingBudgetId);
       pendingYnabBudgetIdRef.current = null;
     }
     setYnabImportView('form');
@@ -587,9 +640,11 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
   }, []);
 
   const tabOrder: ('manual' | 'core' | 'import')[] = ['manual', 'core', 'import'];
+  const isWritingBudget = isImporting || isFinalizingYnab || isCoreImporting;
 
   const swipeTabs = useSwipeable({
     onSwipedLeft: () => {
+      if (isWritingBudget) return;
       const currentIndex = tabOrder.indexOf(tab);
       if (currentIndex < tabOrder.length - 1) {
         setTab(tabOrder[currentIndex + 1]);
@@ -597,6 +652,7 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
       }
     },
     onSwipedRight: () => {
+      if (isWritingBudget) return;
       const currentIndex = tabOrder.indexOf(tab);
       if (currentIndex > 0) {
         setTab(tabOrder[currentIndex - 1]);
@@ -617,13 +673,16 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
     <div className="min-w-0 space-y-3 px-1 text-sm sm:space-y-4 sm:px-0 sm:text-base">
       <Tabs
         value={tab}
-        onValueChange={(v) => setTab(v as 'manual' | 'core' | 'import')}
+        onValueChange={(v) => {
+          if (!isWritingBudget) setTab(v as 'manual' | 'core' | 'import');
+        }}
         className="w-full"
         {...(enableSwipe ? swipeTabs : {})}
         style={enableSwipe ? { touchAction: 'pan-y' } : undefined}
       >
         <TabsList className="grid w-full grid-cols-3 h-auto">
           <TabsTrigger
+            disabled={isWritingBudget}
             value="manual"
             className="flex flex-col sm:flex-row items-center gap-1 sm:gap-2 py-1 px-2 sm:px-3 text-[11px] sm:text-xs"
           >
@@ -631,6 +690,7 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
             <span className="text-[11px] sm:text-xs">New</span>
           </TabsTrigger>
           <TabsTrigger
+            disabled={isWritingBudget}
             value="core"
             className="flex flex-col sm:flex-row items-center gap-1 sm:gap-2 py-1 px-2 sm:px-3 text-[11px] sm:text-xs"
           >
@@ -638,6 +698,7 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
             <span className="text-[11px] sm:text-xs">Backup</span>
           </TabsTrigger>
           <TabsTrigger
+            disabled={isWritingBudget}
             value="import"
             className="flex flex-col sm:flex-row items-center gap-1 sm:gap-2 py-1 px-2 sm:px-3 text-[11px] sm:text-xs"
           >
@@ -697,6 +758,7 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
                 setYnabSourceMode(mode);
                 setYnabPreview(null);
                 setYnabApiSnapshot(null);
+                setYnabDateOrder(undefined);
               }}
               personalAccessToken={ynabPersonalAccessToken}
               onPersonalAccessTokenChange={setYnabPersonalAccessToken}
@@ -717,6 +779,8 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
               file={file}
               onFileChange={handleFileChange}
               preview={ynabPreview}
+              dateOrder={ynabDateOrder}
+              onDateOrderChange={setYnabDateOrder}
               isInspecting={isInspectingYnab}
               isImporting={isImporting}
               onReset={resetForm}

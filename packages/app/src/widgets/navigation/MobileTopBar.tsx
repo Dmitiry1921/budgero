@@ -294,6 +294,7 @@ export function MobileTopBar() {
         <Dialog
           open={createDialogOpen}
           onOpenChange={(open) => {
+            if (!open && useUiStore.getState().isBudgetImporting) return;
             setCreateDialogOpen(open);
             if (!open) setBudgetDropdownOpen(false);
           }}

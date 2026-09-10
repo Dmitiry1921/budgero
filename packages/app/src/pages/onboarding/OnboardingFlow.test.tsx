@@ -46,7 +46,24 @@ vi.mock('./steps', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./steps')>();
   return {
     ...actual,
-    YnabImportStep: () => <div>YNAB source selection</div>,
+    YnabImportStep: ({ set }: { set: (value: Record<string, unknown>) => void }) => (
+      <div>
+        YNAB source selection
+        <button
+          onClick={() =>
+            set({
+              ynabApiSnapshot: null,
+              ynabFile: { name: 'synthetic.zip', bytes: new ArrayBuffer(1), size: '1 B' },
+              ynabPreview: { dateOrderAmbiguous: true },
+              ynabDateOrder: undefined,
+            })
+          }
+        >
+          Load ambiguous ZIP
+        </button>
+        <button onClick={() => set({ ynabDateOrder: 'month-first' })}>Use month-first dates</button>
+      </div>
+    ),
     PasswordStep: () => <div>Master password</div>,
   };
 });
@@ -215,4 +232,20 @@ describe('OnboardingFlow YNAB import verification', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open imported budget' }));
     await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
   });
+});
+
+it('requires a date-order choice before advancing an ambiguous ZIP through onboarding', async () => {
+  render(
+    <MemoryRouter>
+      <QueryClientProvider client={new QueryClient()}>
+        <OnboardingFlow onComplete={vi.fn()} />
+      </QueryClientProvider>
+    </MemoryRouter>
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Load ambiguous ZIP' }));
+  expect(screen.getByRole('button', { name: /Let’s begin/ })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Use month-first dates' }));
+  expect(screen.getByRole('button', { name: /Let’s begin/ })).toBeEnabled();
+  fireEvent.click(screen.getByRole('button', { name: /Let’s begin/ }));
+  expect(screen.getByText('Master password')).toBeInTheDocument();
 });

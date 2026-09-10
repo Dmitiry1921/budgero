@@ -47,6 +47,9 @@ interface ParsedYNABArchive {
 interface YNABCategoryDescriptor {
   categoryGroup: string;
   category: string;
+  sourceId?: string;
+  sourceGroupId?: string;
+  systemCategory?: 'Income' | 'Uncategorized' | 'Transfers';
 }
 
 interface YNABSplitMarker {
@@ -100,12 +103,56 @@ function rowAccountId(row: YNABRegisterRow, accounts: Map<string, number>): numb
 }
 
 function categoryKey(category: YNABCategoryDescriptor): string {
-  return `${category.categoryGroup}::${category.category}`;
+  return category.sourceId
+    ? `id:${category.sourceId}`
+    : `name:${JSON.stringify([category.categoryGroup, category.category])}`;
 }
 
 function categoryDescriptor(
-  row: Pick<YNABRegisterRow | YNABBudgetRow, 'CategoryGroup' | 'Category' | 'CategoryPath'>
+  row: Pick<
+    YNABRegisterRow | YNABBudgetRow,
+    | 'CategoryGroup'
+    | 'Category'
+    | 'CategoryPath'
+    | 'SourceCategoryId'
+    | 'SourceCategoryGroupId'
+    | 'SourceCategoryInternal'
+    | 'SourceCategoryGroupInternal'
+  >
 ): YNABCategoryDescriptor | null {
+  if (row.SourceCategoryId) {
+    const source = {
+      sourceId: row.SourceCategoryId,
+      sourceGroupId: row.SourceCategoryGroupId,
+    };
+    const normalizedName = row.Category.trim().toLowerCase();
+    if (row.SourceCategoryInternal && row.CategoryGroup !== 'Credit Card Payments') {
+      if (normalizedName.includes('ready to assign') || normalizedName.includes('to be budgeted')) {
+        return { ...source, categoryGroup: 'Income', category: 'Income', systemCategory: 'Income' };
+      }
+      if (normalizedName === 'uncategorized') {
+        return {
+          ...source,
+          categoryGroup: 'Uncategorized',
+          category: 'Uncategorized',
+          systemCategory: 'Uncategorized',
+        };
+      }
+    }
+    // Budgero's system groups have financial meaning. A source user's ordinary
+    // group with the same name must remain an ordinary spending envelope.
+    const reservedGroup = ['Income', 'Transfers', 'Uncategorized', 'Credit Card Payments'].includes(
+      row.CategoryGroup
+    );
+    return {
+      ...source,
+      categoryGroup:
+        reservedGroup && !row.SourceCategoryGroupInternal
+          ? `${row.CategoryGroup} (YNAB)`
+          : row.CategoryGroup || 'Imported from YNAB',
+      category: row.Category || 'Imported category',
+    };
+  }
   let categoryGroup = (row.CategoryGroup || '').trim();
   let category = (row.Category || '').trim();
   const categoryPath = (row.CategoryPath || '').trim();
@@ -122,23 +169,37 @@ function categoryDescriptor(
 
   if (!category) return null;
 
+  const normalizedGroup = categoryGroup.toLowerCase();
+  const normalizedCategory = category.toLowerCase();
   if (
-    categoryGroup.toLowerCase().includes('inflow') ||
-    category.toLowerCase().includes('ready to assign')
+    ['inflow', 'income', 'internal master category'].includes(normalizedGroup) &&
+    ['ready to assign', 'to be budgeted', 'to be assigned'].includes(normalizedCategory)
   ) {
-    return { categoryGroup: 'Income', category: 'Income' };
+    return { categoryGroup: 'Income', category: 'Income', systemCategory: 'Income' };
   }
 
-  if (category.toLowerCase() === 'uncategorized') {
-    return { categoryGroup: 'Uncategorized', category: 'Uncategorized' };
+  if (
+    ['', 'uncategorized', 'internal master category'].includes(normalizedGroup) &&
+    normalizedCategory === 'uncategorized'
+  ) {
+    return {
+      categoryGroup: 'Uncategorized',
+      category: 'Uncategorized',
+      systemCategory: 'Uncategorized',
+    };
   }
 
-  if (category.toLowerCase() === 'transfer' || category.toLowerCase() === 'transfers') {
-    return { categoryGroup: 'Transfers', category: 'Transfers' };
+  if (
+    ['', 'transfers', 'internal master category'].includes(normalizedGroup) &&
+    ['transfer', 'transfers'].includes(normalizedCategory)
+  ) {
+    return { categoryGroup: 'Transfers', category: 'Transfers', systemCategory: 'Transfers' };
   }
 
   return {
-    categoryGroup: categoryGroup || 'Imported from YNAB',
+    categoryGroup: ['Income', 'Transfers', 'Uncategorized'].includes(categoryGroup)
+      ? `${categoryGroup} (YNAB)`
+      : categoryGroup || 'Imported from YNAB',
     category,
   };
 }
@@ -191,7 +252,7 @@ function detectSplitGroups(registerRows: YNABRegisterRow[]): YNABSplitGroup[] {
         endIndex++;
       }
       const rows = registerRows.slice(index, endIndex);
-      if (rows.length > 1) {
+      if (rows.length > 0) {
         groups.push({
           startIndex: index,
           rows,
@@ -234,6 +295,34 @@ function detectSplitGroups(registerRows: YNABRegisterRow[]): YNABSplitGroup[] {
   return groups;
 }
 
+function inspectDateOrder(dates: (string | undefined)[]): {
+  dayFirstEvidence: number;
+  monthFirstEvidence: number;
+  ambiguous: boolean;
+} {
+  let dayFirstEvidence = 0;
+  let monthFirstEvidence = 0;
+  let hasDistinctDayAndMonth = false;
+
+  for (const raw of dates) {
+    const match = raw?.trim().match(AMBIGUOUS_DATE_REGEX);
+    if (!match) continue;
+    const first = Number(match[1]);
+    const second = Number(match[2]);
+    if (first > 12 && second >= 1 && second <= 12) dayFirstEvidence++;
+    else if (second > 12 && first >= 1 && first <= 12) monthFirstEvidence++;
+    else if (first >= 1 && first <= 12 && second >= 1 && second <= 12 && first !== second) {
+      hasDistinctDayAndMonth = true;
+    }
+  }
+
+  return {
+    dayFirstEvidence,
+    monthFirstEvidence,
+    ambiguous: hasDistinctDayAndMonth && dayFirstEvidence === 0 && monthFirstEvidence === 0,
+  };
+}
+
 function inspectYNABRows(
   registerRows: YNABRegisterRow[],
   budgetRows: YNABBudgetRow[]
@@ -272,6 +361,7 @@ function inspectYNABRows(
   const splitGroups = detectSplitGroups(registerRows);
 
   return {
+    dateOrderAmbiguous: inspectDateOrder(registerRows.map((row) => row.Date)).ambiguous,
     registerRowCount: registerRows.length,
     accountCount: new Set(
       registerRows
@@ -384,7 +474,12 @@ export class YNABImportService {
     config: YNABImportConfig
   ): Promise<YNABImportResult> {
     const { registerRows, budgetRows } = await parseYNABArchive(zipData, this.csvParser);
-    return this.importYNABRowsWithSummary(registerRows, budgetRows, config, config.numberFormat);
+    return this.importYNABRowsWithSummary(
+      registerRows,
+      budgetRows,
+      config,
+      config.sourceNumberFormat ?? config.numberFormat
+    );
   }
 
   async importYNABFromApiSnapshotWithSummary(
@@ -447,7 +542,10 @@ export class YNABImportService {
       });
     }
 
-    this.detectAmbiguousDateOrder(registerRows.map((row) => row.Date));
+    this.detectAmbiguousDateOrder(
+      registerRows.map((row) => row.Date),
+      config.dateOrder
+    );
     debugLog(`Parsed ${budgetRows.length} budget rows`);
 
     // Create budget WITHOUT default categories since we're importing our own
@@ -629,6 +727,7 @@ export class YNABImportService {
         categoryVerification = await this.verifyYNABCategoryMonths(
           budgetId,
           categoryMonthSpecs,
+          categories,
           async (processed, total, month) => {
             const progress = Math.min(94, 91 + Math.floor((processed / total) * 3));
             await reportProgress({
@@ -847,6 +946,7 @@ export class YNABImportService {
   private async verifyYNABCategoryMonths(
     budgetId: number,
     specs: YNABImportCategoryMonthSpec[],
+    categories: Record<string, number>,
     onMonth?: (processed: number, total: number, month: string) => void | Promise<void>
   ): Promise<{
     checked: number;
@@ -871,11 +971,19 @@ export class YNABImportService {
       const rows = new Map(
         this.monthlyBudgetService
           .getMonthlyBudget(month, budgetId)
-          .map((row) => [`${row.CategoryGroup}::${row.Category}`, row])
+          .map((row) => [row.CategoryID, row])
       );
 
       for (const spec of monthSpecs) {
-        const row = rows.get(`${spec.categoryGroup}::${spec.category}`);
+        const categoryId =
+          categories[
+            categoryKey({
+              categoryGroup: spec.categoryGroup,
+              category: spec.category,
+              sourceId: spec.ynabCategoryId,
+            })
+          ];
+        const row = categoryId === undefined ? undefined : rows.get(categoryId);
         const comparisons = [
           ['assigned', spec.expectedAssigned, Number(row?.Assigned ?? 0)],
           ['activity', spec.expectedActivity, Number(row?.Activity ?? 0)],
@@ -959,8 +1067,8 @@ export class YNABImportService {
     budgetRows: YNABBudgetRow[],
     registerRows: YNABRegisterRow[]
   ): Record<string, number> {
-    const categories: Record<string, number> = {};
-    const categoryGroups: Record<string, number> = {};
+    const categories: Record<string, number> = Object.create(null);
+    const categoryGroups: Record<string, number> = Object.create(null);
 
     debugLog('Starting createCategoryStructure');
     debugLog(`Processing ${budgetRows.length} budget rows`);
@@ -979,6 +1087,7 @@ export class YNABImportService {
       ''
     );
     categories['Income::Income'] = incomeCategoryId;
+    categories[categoryKey({ categoryGroup: 'Income', category: 'Income' })] = incomeCategoryId;
     categories['Income'] = incomeCategoryId; // Fallback for compatibility
 
     const uncategorizedCategoryId = ensureCategoryWithGroup(
@@ -989,6 +1098,8 @@ export class YNABImportService {
       ''
     );
     categories['Uncategorized::Uncategorized'] = uncategorizedCategoryId;
+    categories[categoryKey({ categoryGroup: 'Uncategorized', category: 'Uncategorized' })] =
+      uncategorizedCategoryId;
     categories['Uncategorized'] = uncategorizedCategoryId; // Fallback for compatibility
 
     // Then map all existing category groups (system ones included) so the
@@ -1000,13 +1111,45 @@ export class YNABImportService {
       debugLog(`Existing group: "${group.Name}" with ID ${group.ID}`);
     }
 
+    const sourceGroups = new Map<string, number>();
+    for (const row of [...budgetRows, ...registerRows]) {
+      if (!row.SourceCategoryId) continue;
+      const descriptor = categoryDescriptor(row)!;
+      const key = categoryKey(descriptor);
+      if (categories[key] !== undefined) continue;
+      if (descriptor.systemCategory) {
+        categories[key] = ensureCategoryWithGroup(
+          this.categoryService,
+          budgetId,
+          descriptor.systemCategory,
+          descriptor.systemCategory,
+          ''
+        );
+        continue;
+      }
+      const groupKey = descriptor.sourceGroupId || descriptor.categoryGroup;
+      let groupId = sourceGroups.get(groupKey);
+      if (groupId === undefined) {
+        groupId = this.categoryService.addCategoryGroup(descriptor.categoryGroup, budgetId);
+        sourceGroups.set(groupKey, groupId);
+      }
+      categories[key] = this.categoryService.addCategory(
+        groupId,
+        budgetId,
+        descriptor.category,
+        ''
+      );
+    }
+
     let rowCount = 0;
     const seenInRows: Set<string> = new Set();
     for (const row of budgetRows) {
+      if (row.SourceCategoryId) continue;
       rowCount++;
-      if (row.CategoryGroup && row.Category) {
-        let groupName = row.CategoryGroup.trim();
-        let categoryName = row.Category.trim();
+      const descriptor = categoryDescriptor(row);
+      if (descriptor) {
+        const groupName = descriptor.categoryGroup;
+        const categoryName = descriptor.category;
 
         const rowKey = `${row.Month}::${groupName}::${categoryName}`;
         if (!seenInRows.has(rowKey)) {
@@ -1014,16 +1157,6 @@ export class YNABImportService {
           debugLog(
             `Row ${rowCount}: Month="${row.Month}", Group="${groupName}", Category="${categoryName}"`
           );
-        }
-
-        // Map YNAB special categories to Income
-        if (
-          groupName.toLowerCase().includes('inflow') ||
-          categoryName.toLowerCase().includes('ready to assign')
-        ) {
-          debugLog(`Mapping "${groupName}::${categoryName}" to "Income::Income"`);
-          groupName = 'Income';
-          categoryName = 'Income';
         }
 
         if (!(groupName in categoryGroups)) {
@@ -1041,15 +1174,15 @@ export class YNABImportService {
 
         // Create category with unique key per group
         // Use groupName::categoryName as the key to allow same category names in different groups
-        const categoryKey = `${groupName}::${categoryName}`;
-        if (!(categoryKey in categories)) {
+        const key = categoryKey({ categoryGroup: groupName, category: categoryName });
+        if (!(key in categories)) {
           const categoryId = this.categoryService.addCategory(
             categoryGroups[groupName],
             budgetId,
             categoryName,
             ''
           );
-          categories[categoryKey] = categoryId;
+          categories[key] = categoryId;
         }
       }
     }
@@ -1059,27 +1192,33 @@ export class YNABImportService {
     // by creating the exact group/category pair instead of silently routing
     // them to Uncategorized.
     for (const row of registerRows) {
+      if (row.SourceCategoryId) continue;
       const descriptor = categoryDescriptor(row);
       if (!descriptor) continue;
 
       const key = categoryKey(descriptor);
       if (categories[key]) continue;
 
-      const categoryId = ensureCategoryWithGroup(
-        this.categoryService,
-        budgetId,
-        descriptor.categoryGroup,
-        descriptor.category,
-        ''
-      );
+      let groupId = categoryGroups[descriptor.categoryGroup];
+      if (groupId === undefined) {
+        groupId = this.categoryService.addCategoryGroup(descriptor.categoryGroup, budgetId);
+        categoryGroups[descriptor.categoryGroup] = groupId;
+      }
+      // The generic helper reuses a category by name across all groups. A
+      // register-only source category still belongs to its exact source group.
+      const categoryId = descriptor.systemCategory
+        ? ensureCategoryWithGroup(
+            this.categoryService,
+            budgetId,
+            descriptor.categoryGroup,
+            descriptor.category,
+            ''
+          )
+        : this.categoryService.addCategory(groupId, budgetId, descriptor.category, '');
       categories[key] = categoryId;
 
-      if (
-        descriptor.category === 'Income' ||
-        descriptor.category === 'Uncategorized' ||
-        descriptor.category === 'Transfers'
-      ) {
-        categories[descriptor.category] = categoryId;
+      if (descriptor.systemCategory) {
+        categories[descriptor.systemCategory] = categoryId;
       }
     }
 
@@ -1142,10 +1281,19 @@ export class YNABImportService {
 
     for (const spec of specs) {
       const accountName = spec.name;
-      const inferredLinkedCategoryId =
-        spec.linkedCategoryGroup && spec.linkedCategory
-          ? categories[`${spec.linkedCategoryGroup}::${spec.linkedCategory}`]
+      const inferredLinkedCategoryId = spec.linkedYNABCategoryId
+        ? categories[`id:${spec.linkedYNABCategoryId}`]
+        : spec.linkedCategoryGroup && spec.linkedCategory
+          ? categories[
+              categoryKey({
+                categoryGroup: spec.linkedCategoryGroup,
+                category: spec.linkedCategory,
+              })
+            ]
           : undefined;
+      const creditPaymentCategoryId = spec.creditPaymentYNABCategoryId
+        ? categories[`id:${spec.creditPaymentYNABCategoryId}`]
+        : undefined;
       const account = await this.accountService.createAccount(
         accountName,
         budgetId,
@@ -1156,6 +1304,9 @@ export class YNABImportService {
           ? {
               ...(spec.ynabAccountId ? { ynab_account_id: spec.ynabAccountId } : {}),
               ...(inferredLinkedCategoryId ? { linked_category_id: inferredLinkedCategoryId } : {}),
+              ...(creditPaymentCategoryId
+                ? { cc_payment_category_id: creditPaymentCategoryId }
+                : {}),
             }
           : undefined,
         spec.onBudget
@@ -1194,20 +1345,13 @@ export class YNABImportService {
         continue;
       }
 
-      let categoryName = row.Category.trim();
-      let groupName = row.CategoryGroup.trim();
-
-      if (
-        row.CategoryGroup.toLowerCase().includes('ready to assign') ||
-        row.CategoryGroup.toLowerCase().includes('to be assigned')
-      ) {
-        categoryName = 'Income';
-        groupName = 'Income';
-      }
-
-      // Use the same key format as in createCategoryStructure
-      const categoryKey = `${groupName}::${categoryName}`;
-      const categoryId = categories[categoryKey] || categories[categoryName]; // Fallback for Income/Uncategorized
+      const descriptor = categoryDescriptor(row);
+      if (!descriptor) continue;
+      const categoryName = descriptor.category;
+      const groupName = descriptor.categoryGroup;
+      const categoryId =
+        categories[categoryKey(descriptor)] ||
+        (descriptor.systemCategory ? categories[descriptor.systemCategory] : undefined);
       if (!categoryId) {
         debugLog(
           `Category '${categoryName}' in group '${groupName}' not found, skipping assignment`
@@ -1427,15 +1571,22 @@ export class YNABImportService {
 
     const idsByRowIndex = new Map<number, string>();
     const pairingStates = new Map<string, TransferPairingState>();
+    // Transfer IDs are used by transaction editing/deletion across this database.
+    // Source IDs repeat when a plan is imported again, so each import needs its
+    // own namespace (also safe when separately imported budgets later sync).
+    const namespace = crypto.randomUUID();
 
     for (let rowIndex = 0; rowIndex < registerRows.length; rowIndex++) {
       const row = registerRows[rowIndex];
       if (!isTransferRow(row)) continue;
       const counterpartyName = transferCounterpartyName(row);
       if (row.TransferID) {
-        idsByRowIndex.set(rowIndex, row.TransferID);
+        idsByRowIndex.set(rowIndex, `ynab_${namespace}_${row.TransferID}`);
         continue;
       }
+
+      // Even an unmatched leg must have an identity local to this import.
+      idsByRowIndex.set(rowIndex, `ynab_${namespace}_row_${rowIndex}`);
 
       const currentAccountId = rowAccountId(row, accounts);
       const counterpartyAccountId = accounts.get(
@@ -1476,7 +1627,7 @@ export class YNABImportService {
       const ownQueue = inflow > 0 ? state.unmatchedInflows : state.unmatchedOutflows;
       let transferId = oppositeQueue.shift();
       if (!transferId) {
-        transferId = `transfer_${parsedDate}_${amount}_${firstAccountId}_${secondAccountId}_${rowIndex + 1}`;
+        transferId = `ynab_${namespace}_pair_${rowIndex}`;
         ownQueue.push(transferId);
       }
 
@@ -1495,11 +1646,14 @@ export class YNABImportService {
     uncategorizedCategoryId: number
   ): number {
     const descriptor = categoryDescriptor(row);
-    if (!descriptor) return inflow > 0 ? incomeCategoryId : uncategorizedCategoryId;
+    if (!descriptor) {
+      if (row.SourceAccountId !== undefined) return uncategorizedCategoryId;
+      return inflow > 0 ? incomeCategoryId : uncategorizedCategoryId;
+    }
 
     return (
       categories[categoryKey(descriptor)] ||
-      categories[descriptor.category] ||
+      (descriptor.systemCategory ? categories[descriptor.systemCategory] : undefined) ||
       uncategorizedCategoryId
     );
   }
@@ -1543,11 +1697,9 @@ export class YNABImportService {
 
     const inflow = asMilli(prepared.reduce((sum, part) => sum + Number(part.inflow), 0));
     const outflow = asMilli(prepared.reduce((sum, part) => sum + Number(part.outflow), 0));
-    // YNAB exports only the child rows for a split, not separate parent
-    // metadata. Keep every exported payee/memo on its own line and use a clear
-    // generated parent memo rather than promoting the first child arbitrarily.
-    const parentMemo = 'Imported YNAB split';
-    const payee = '';
+    // CSV exports omit the parent details; API snapshots supply them explicitly.
+    const parentMemo = firstRow.SourceParentMemo ?? 'Imported YNAB split';
+    const payee = firstRow.SourceParentPayee ?? '';
 
     try {
       const parentId = await this.transactionService.addTransaction(
@@ -1575,6 +1727,12 @@ export class YNABImportService {
           OrderIndex: orderIndex,
         }))
       );
+
+      if (group.rows.every((row) => row.Cleared.trim().toLowerCase() === 'reconciled')) {
+        this.db
+          .prepare('UPDATE transactions SET Reconciled = 1 WHERE ID = ? AND BudgetID = ?')
+          .run(parentId, budgetId);
+      }
 
       return true;
     } catch (error) {
@@ -1624,13 +1782,25 @@ export class YNABImportService {
     }
 
     let memo = row.Memo;
+    if (row.SourceSubtransactionId) {
+      // Transfer-containing splits are expanded into individual ledger rows.
+      // Keep their parent-only context alongside the original child note.
+      const parentDetails: string[] = [];
+      if (row.SourceParentMemo && row.SourceParentMemo !== memo) {
+        parentDetails.push(`YNAB split memo: ${row.SourceParentMemo}`);
+      }
+      if (row.SourceParentPayee && row.SourceParentPayee !== row.Payee) {
+        parentDetails.push(`YNAB split payee: ${row.SourceParentPayee}`);
+      }
+      memo = [memo, ...parentDetails].filter(Boolean).join('\n');
+    }
     const rawPayee = (row.Payee || '').trim();
     const payeeLower = rawPayee.toLowerCase();
     let payee = rawPayee.length > 0 ? rawPayee : 'Budgero';
     let transferId = '';
 
-    if (payeeLower.includes('starting balance')) {
-      memo = 'Starting Balance';
+    if (payeeLower === 'starting balance') {
+      memo ||= 'Starting Balance';
       payee = 'Budgero';
       // A credit card's opening balance is existing debt, not budget money:
       // YNAB leaves it out of Ready to Assign, and so does Budgero (credit
@@ -1638,7 +1808,7 @@ export class YNABImportService {
       if (creditCardAccountIds.has(accountId)) {
         categoryId = transfersCategoryId;
       }
-    } else if (payeeLower.includes('reconciliation balance adjustment')) {
+    } else if (payeeLower === 'reconciliation balance adjustment') {
       payee = 'Budgero';
     }
 
@@ -1664,13 +1834,13 @@ export class YNABImportService {
       }
 
       const currentAccount = row.Account.trim();
-      if (inflow > 0) {
+      if (!memo && inflow > 0) {
         // This is the receiving account
         const sourceAccount = transferCounterpartyName(row);
         memo = sourceAccount
           ? `Transfer from ${sourceAccount} to ${currentAccount}`
           : `Transfer to ${currentAccount}`;
-      } else if (outflow > 0) {
+      } else if (!memo && outflow > 0) {
         // This is the sending account
         const destinationAccount = transferCounterpartyName(row);
         memo = destinationAccount
@@ -1684,7 +1854,7 @@ export class YNABImportService {
       debugLog(
         `Importing row ${rowIndex} -> memo='${memo}' payee='${payee}' inflow=${inflow} outflow=${outflow}`
       );
-      await this.transactionService.addTransaction(
+      const transactionId = await this.transactionService.addTransaction(
         inflow,
         outflow,
         accountId,
@@ -1698,6 +1868,11 @@ export class YNABImportService {
         undefined,
         row.ExcludeFromReadyToAssign === true
       );
+      if (row.Cleared.trim().toLowerCase() === 'reconciled') {
+        this.db
+          .prepare('UPDATE transactions SET Reconciled = 1 WHERE ID = ? AND BudgetID = ?')
+          .run(transactionId, budgetId);
+      }
       return true;
     } catch (error) {
       console.error(`DEBUG: Error adding transaction ${rowIndex}:`, error);
@@ -1716,18 +1891,15 @@ export class YNABImportService {
    * dates once for a leading or middle component that can only be a day
    * (> 12) and lock the order in for the whole import.
    */
-  private detectAmbiguousDateOrder(dates: (string | undefined)[]): void {
-    let dayFirstEvidence = 0;
-    let monthFirstEvidence = 0;
-
-    for (const raw of dates) {
-      const match = raw?.trim().match(AMBIGUOUS_DATE_REGEX);
-      if (!match) continue;
-      const first = Number(match[1]);
-      const second = Number(match[2]);
-      if (first > 12 && second <= 12) dayFirstEvidence++;
-      else if (second > 12 && first <= 12) monthFirstEvidence++;
+  private detectAmbiguousDateOrder(
+    dates: (string | undefined)[],
+    dateOrder?: YNABImportConfig['dateOrder']
+  ): void {
+    if (dateOrder) {
+      this.ambiguousDayFirst = dateOrder === 'day-first';
+      return;
     }
+    const { dayFirstEvidence, monthFirstEvidence } = inspectDateOrder(dates);
 
     // Ties (no evidence either way) keep the historical day-first default.
     this.ambiguousDayFirst = monthFirstEvidence <= dayFirstEvidence;
