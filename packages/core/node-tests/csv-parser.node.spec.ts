@@ -61,24 +61,15 @@ describe('German bank CSV (Sparkasse-style export)', () => {
     expect(net).toBeLessThan(3000);
   });
 
-  it('reproduces the customer bug when US format is selected (regression guard)', () => {
-    // This documents what Julia hit: defaults of "1,234.56" (US) treat the
-    // dot in "1.250,00" as the decimal separator, so the parser reads it as
-    // 1.250 and then chokes on the trailing ",00" or strips it. The point of
-    // this test is to make sure that *with the wrong preset* we get garbage,
-    // so that whenever we wire up auto-detect we can flip this to the
-    // correct expected values.
+  it('rejects conflicting US formatting instead of silently changing German amounts', () => {
     const csv = loadFixture('sample-german-bank.csv');
     const { rows } = parseDelimitedText(csv, SKIP_ROWS);
     const US_FORMAT = '123,456.78';
 
-    const rent = currencyParser.parseYNABAmountAdvanced(rows[0].Betrag, US_FORMAT);
-    const salary = currencyParser.parseYNABAmountAdvanced(rows[3].Betrag, US_FORMAT);
-
-    // With the wrong preset, the rent amount is NOT -1250.00. The exact
-    // wrong value depends on the parser internals; what matters is that it
-    // diverges from the truth by a large factor.
-    expect(Math.abs(rent + 1250)).toBeGreaterThan(1);
-    expect(Math.abs(salary - 2847.55)).toBeGreaterThan(1);
+    for (const amount of [rows[0].Betrag, rows[3].Betrag]) {
+      expect(() => currencyParser.parseYNABAmountAdvanced(amount, US_FORMAT)).toThrow(
+        /Unable to parse YNAB amount/
+      );
+    }
   });
 });

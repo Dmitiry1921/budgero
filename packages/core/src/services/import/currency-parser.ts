@@ -1,217 +1,107 @@
+const CURRENCY_CODES = new Set(
+  (
+    'AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND BOB BRL BSD BTN BWP BYN BZD ' +
+    'CAD CDF CHF CLP CNY COP CRC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS GIP GMD GNF GTQ GYD ' +
+    'HKD HNL HTG HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD ' +
+    'MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MYR MZN NAD NGN NIO NOK NPR NZD OMR PAB PEN PGK PHP PKR PLN PYG ' +
+    'QAR RON RSD RUB RWF SAR SBD SCR SDG SEK SGD SHP SLE SLL SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD ' +
+    'TZS UAH UGX USD UYU UZS VED VES VND VUV WST XAF XCD XOF XPF YER ZAR ZMW ZWL'
+  ).split(' ')
+);
+
 export class CurrencyParser {
   removeCurrencySymbols(input: string): string {
-    const currencyPatterns = [
-      'Дин\\.', // Serbian Dinar (Cyrillic)
-      'Din\\.', // Serbian Dinar (Latin)
-      'RSD', // Serbian Dinar code
-      'USD', // US Dollar
-      'EUR', // Euro
-      'GBP', // British Pound
-      '₹', // Indian Rupee
-      '¥', // Japanese Yen / Chinese Yuan
-      '₩', // Korean Won
-      '₽', // Russian Ruble
-      '\\$', // Dollar symbol
-      '€', // Euro symbol
-      '£', // Pound symbol
-      '¢', // Cent symbol
-      '₪', // Israeli Shekel
-      '₴', // Ukrainian Hryvnia
-      '₦', // Nigerian Naira
-      '₨', // Rupee symbol
-      '﷼', // Rial symbol
-      '₡', // Costa Rican Colon
-      '₵', // Ghanaian Cedi
-      '₸', // Kazakhstani Tenge
-      '₼', // Azerbaijani Manat
-      '₻', // Nordic Mark
-      '₺', // Turkish Lira
-    ];
-
-    let result = input;
-    for (const pattern of currencyPatterns) {
-      const re = new RegExp(pattern, 'g');
-      result = result.replace(re, '');
-    }
-
-    return result.trim();
+    return input
+      .replace(/[\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069]/g, '')
+      .replace(/(?<!\p{L})(?:R|NT|S)\$/giu, '')
+      .replace(/\p{Sc}/gu, '')
+      .replace(/(?<!\p{L})[A-Za-z]{3}(?!\p{L})/gu, (code) =>
+        CURRENCY_CODES.has(code.toUpperCase()) ? '' : code
+      )
+      .replace(/(?<!\p{L})(?:US|CA|AU|NZ|HK|SG|kr|Fr|Ft|lei|kn|Din)(?!\p{L})\.?/giu, '')
+      .replace(/(?:Дин\.|zł|Kč|лв|﷼)/giu, '')
+      .trim();
   }
 
   parseYNABAmountAdvanced(amountStr: string, numberFormat: string): number {
-    if (!amountStr) {
-      return 0.0;
+    if (!amountStr || !amountStr.trim()) return 0;
+
+    // Grouping separators vary even within one locale (ordinary, non-breaking,
+    // and narrow spaces; straight and curly Swiss apostrophes).
+    let amount = this.removeCurrencySymbols(amountStr)
+      .replace(/[−－]/g, '-')
+      .replace(/[\s'’ʼ]/gu, '');
+    let negative = false;
+    if (amount.startsWith('(') && amount.endsWith(')')) {
+      negative = true;
+      amount = amount.slice(1, -1);
+    } else if (amount.startsWith('-') || amount.endsWith('-')) {
+      negative = true;
+      amount = amount.startsWith('-') ? amount.slice(1) : amount.slice(0, -1);
+    } else if (amount.startsWith('+')) {
+      amount = amount.slice(1);
     }
 
-    let cleanAmount = this.removeCurrencySymbols(amountStr);
-    cleanAmount = cleanAmount.trim();
-
-    if (!cleanAmount) {
-      return 0.0;
+    const decimalSeparator = this.decimalSeparatorForFormat(numberFormat);
+    const value = decimalSeparator
+      ? this.parseWithDecimal(amount, decimalSeparator)
+      : this.autoDetectAndParse(amount);
+    if (value === undefined || !Number.isFinite(value)) {
+      throw new Error(`Unable to parse YNAB amount: ${amountStr}`);
     }
-
-    const isNegative = cleanAmount.startsWith('-');
-    if (isNegative) {
-      cleanAmount = cleanAmount.substring(1);
-    }
-
-    let value = -1;
-    if (numberFormat) {
-      value = this.parseWithFormat(cleanAmount, numberFormat);
-    }
-
-    // If format-specific parsing failed, auto-detect
-    if (value === -1) {
-      value = this.autoDetectAndParse(cleanAmount);
-    }
-
-    if (isNegative) {
-      value = -value;
-    }
-
-    return value;
+    return negative ? -value : value;
   }
 
-  private parseWithFormat(cleanAmount: string, format: string): number {
-    switch (format) {
-      case '123,456.78':
-      case '1,234.56':
-        return this.parseUSFormat(cleanAmount);
-      case '123.456,78':
-      case '1.234,56':
-        return this.parseEuropeanFormat(cleanAmount);
-      case '123 456.78':
-      case '1 234.56':
-        return this.parseFrenchFormat(cleanAmount, '.');
-      case '123 456,78':
-      case '1 234,56':
-        return this.parseFrenchFormat(cleanAmount, ',');
-      case "123'456.78":
-        return this.parseSwissFormat(cleanAmount);
-      case '123,456/78':
-        return this.parseFractionalFormat(cleanAmount);
-      case '123 456-78':
-        return this.parseDashDecimalFormat(cleanAmount);
-      case '1,23,456.78':
-        return this.parseIndianFormat(cleanAmount);
-      default:
-        return this.autoDetectAndParse(cleanAmount);
+  private decimalSeparatorForFormat(format: string): string | undefined {
+    const example = this.removeCurrencySymbols(format || '').replace(/[\s'’ʼ]/gu, '');
+    const fraction = /([.,/-])(\d{1,3})$/.exec(example);
+    if (!fraction) return undefined;
+    // A lone separator followed by three digits can be a zero-decimal display
+    // preset ("$1,097"). Preserve automatic handling for those existing presets.
+    if (fraction[2].length === 3 && !/[.,/-]/.test(example.slice(0, fraction.index))) {
+      return undefined;
     }
+    return fraction[1];
   }
 
-  private parseUSFormat(input: string): number {
-    // Format: 1,234.56 (comma thousands, dot decimal)
-    input = input.replace(/,/g, '');
-    const value = parseFloat(input);
-    return isNaN(value) ? -1 : value;
-  }
-
-  private parseEuropeanFormat(input: string): number {
-    // Format: 1.234,56 (dot thousands, comma decimal)
-    const parts = input.split(',');
-    if (parts.length === 2) {
-      // Has decimal part
-      const wholePart = parts[0].replace(/\./g, '');
-      const decimalPart = parts[1];
-      if (decimalPart.length > 2) {
-        return -1; // Invalid decimal part
-      }
-      const combined = `${wholePart}.${decimalPart}`;
-      const value = parseFloat(combined);
-      return isNaN(value) ? -1 : value;
+  private parseWithDecimal(input: string, decimalSeparator: string): number | undefined {
+    const parts = input.split(decimalSeparator);
+    if (parts.length > 2 || (parts.length === 2 && !/^\d{1,3}$/.test(parts[1]))) {
+      return undefined;
     }
-    // No decimal part, dots are thousands separators
-    const cleaned = input.replace(/\./g, '');
-    const value = parseFloat(cleaned);
-    return isNaN(value) ? -1 : value;
+    const groupingSeparator = decimalSeparator === ',' ? '.' : ',';
+    const whole =
+      parts.length === 2 && parts[0] === '' ? '0' : this.parseWhole(parts[0], groupingSeparator);
+    if (whole === undefined) return undefined;
+    const normalized = parts.length === 2 ? `${whole}.${parts[1]}` : whole;
+    return Number(normalized);
   }
 
-  private parseFrenchFormat(input: string, decimalSep: string): number {
-    // Format: 1 234.56 or 1 234,56 (space thousands, dot/comma decimal)
-    input = input.replace(/ /g, '');
-    if (decimalSep === ',') {
-      input = input.replace(/,/g, '.');
+  private parseWhole(input: string, groupingSeparator: string): string | undefined {
+    if (/^\d+$/.test(input)) return input;
+    const groups = input.split(groupingSeparator);
+    if (groups.length < 2 || !/^\d{1,3}$/.test(groups[0])) return undefined;
+    const western = groups.slice(1).every((group) => /^\d{3}$/.test(group));
+    const indian =
+      groups[0].length <= 2 &&
+      /^\d{3}$/.test(groups[groups.length - 1]) &&
+      groups.slice(1, -1).every((group) => /^\d{2}$/.test(group));
+    return western || indian ? groups.join('') : undefined;
+  }
+
+  private autoDetectAndParse(input: string): number | undefined {
+    const lastComma = input.lastIndexOf(',');
+    const lastDot = input.lastIndexOf('.');
+    if (lastComma >= 0 && lastDot >= 0) {
+      return this.parseWithDecimal(input, lastComma > lastDot ? ',' : '.');
     }
-    const value = parseFloat(input);
-    return isNaN(value) ? -1 : value;
-  }
-
-  private parseSwissFormat(input: string): number {
-    // Format: 1'234.56 (apostrophe thousands, dot decimal)
-    input = input.replace(/'/g, '');
-    const value = parseFloat(input);
-    return isNaN(value) ? -1 : value;
-  }
-
-  private parseFractionalFormat(input: string): number {
-    // Format: 1,234/56 (comma thousands, slash decimal)
-    input = input.replace(/,/g, '');
-    input = input.replace(/\//g, '.');
-    const value = parseFloat(input);
-    return isNaN(value) ? -1 : value;
-  }
-
-  private parseDashDecimalFormat(input: string): number {
-    // Format: 1 234-56 (space thousands, dash decimal)
-    input = input.replace(/ /g, '');
-    input = input.replace(/-/g, '.');
-    const value = parseFloat(input);
-    return isNaN(value) ? -1 : value;
-  }
-
-  private parseIndianFormat(input: string): number {
-    // Format: 1,23,456.78 (Indian number system)
-    input = input.replace(/,/g, '');
-    const value = parseFloat(input);
-    return isNaN(value) ? -1 : value;
-  }
-
-  private autoDetectAndParse(input: string): number {
-    const commaCount = (input.match(/,/g) || []).length;
-    const dotCount = (input.match(/\./g) || []).length;
-    const spaceCount = (input.match(/ /g) || []).length;
-
-    // Strategy 1: Both comma and dot present
-    if (commaCount > 0 && dotCount > 0) {
-      const lastComma = input.lastIndexOf(',');
-      const lastDot = input.lastIndexOf('.');
-
-      if (lastDot > lastComma) {
-        // Dot is decimal separator (e.g., 1,234.56)
-        return this.parseUSFormat(input);
-      }
-      // Comma is decimal separator (e.g., 1.234,56)
-      return this.parseEuropeanFormat(input);
+    const separator = lastComma >= 0 ? ',' : lastDot >= 0 ? '.' : undefined;
+    if (!separator) return /^\d+$/.test(input) ? Number(input) : undefined;
+    const parts = input.split(separator);
+    if (parts.length === 2 && /^\d{1,2}$/.test(parts[1])) {
+      return this.parseWithDecimal(input, separator);
     }
-
-    // Strategy 2: Only comma present
-    if (commaCount > 0 && dotCount === 0) {
-      const parts = input.split(',');
-      if (parts.length === 2 && parts[1].length <= 2 && parts[1].length > 0) {
-        // Likely decimal separator (e.g., 123,45)
-        return this.parseFrenchFormat(input, ',');
-      }
-      // Likely thousand separator (e.g., 1,234,567)
-      return this.parseUSFormat(input);
-    }
-
-    // Strategy 3: Only dot present
-    if (dotCount > 0 && commaCount === 0) {
-      const parts = input.split('.');
-      if (parts.length === 2 && parts[1].length <= 2 && parts[1].length > 0) {
-        // Likely decimal separator (e.g., 123.45)
-        return this.parseUSFormat(input);
-      }
-      // Likely thousand separator (e.g., 1.234.567)
-      return this.parseEuropeanFormat(input);
-    }
-
-    // Strategy 4: Only spaces present
-    if (spaceCount > 0) {
-      return this.parseFrenchFormat(input, '.');
-    }
-
-    // Strategy 5: No separators, just parse as is
-    const value = parseFloat(input);
-    return isNaN(value) ? 0.0 : value;
+    const whole = this.parseWhole(input, separator);
+    return whole === undefined ? undefined : Number(whole);
   }
 }

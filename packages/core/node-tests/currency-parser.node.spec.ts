@@ -46,4 +46,54 @@ describe('CurrencyParser', () => {
     expect(parser.parseYNABAmountAdvanced('-1,234.56', '123,456.78')).toBeCloseTo(-1234.56, 6);
     expect(parser.parseYNABAmountAdvanced('-€1.234,56', '123.456,78')).toBeCloseTo(-1234.56, 6);
   });
+
+  it.each([
+    ['1\u202f234,56 €', '1 096,56 $US', 1234.56],
+    ['1\u00a0234,56 €', '1 096,56 $US', 1234.56],
+    ['kr 1 234,56', '1 096,56 $US', 1234.56],
+    ["1'234.56", '$1,096.56', 1234.56],
+    ['CHF 1’234.56', '$1,096.56', 1234.56],
+    ['CHF1’234.56', '$1,096.56', 1234.56],
+    ['1,234', '$1,096.56', 1234],
+    ['1.234', '1.096,56 $', 1234],
+    ['1,234', '1 096,56 $US', 1.234],
+    ['KWD 1,234.567', '123,456.78', 1234.567],
+    ['KWD 1.234,567', '123.456,78', 1234.567],
+    ['KWD 0.001', '123,456.78', 0.001],
+    ['−CHF 1’234.56', '$1,096.56', -1234.56],
+    ['(kr 1 234,56)', '1 096,56 $US', -1234.56],
+    ['1\u202f234,56 €-', '1 096,56 $US', -1234.56],
+    ['-1.00', '$1,096.56', -1],
+    ['1,234/56', '123,456/78', 1234.56],
+    ['-1 234-56', '123 456-78', -1234.56],
+    ['.50', '$1,096.56', 0.5],
+    [',50', '1 096,56 $US', 0.5],
+    ['-.50', '', -0.5],
+    [',50', '', 0.5],
+    ['.005', '123,456.78', 0.005],
+    ['R$ 1.234,56', '1.096,56 $', 1234.56],
+    ['NT$1,234.56', '$1,096.56', 1234.56],
+    ['S$1,234.56', '$1,096.56', 1234.56],
+  ])('parses the complete amount %s using display preset %s', (amount, format, expected) => {
+    expect(parser.parseYNABAmountAdvanced(amount, format)).toBe(expected);
+  });
+
+  it.each([
+    'garbage',
+    'CHF',
+    '12oops',
+    '1.25 trailing text',
+    '1,234,56',
+    '--12',
+    'NaN',
+    'Infinity',
+  ])('rejects an unparseable nonempty amount %s', (amount) => {
+    expect(() => parser.parseYNABAmountAdvanced(amount, '$1,096.56')).toThrow(
+      /Unable to parse YNAB amount/
+    );
+  });
+
+  it.each(['', ' ', '\u202f'])('treats an empty amount cell as zero: %s', (amount) => {
+    expect(parser.parseYNABAmountAdvanced(amount, '$1,096.56')).toBe(0);
+  });
 });
