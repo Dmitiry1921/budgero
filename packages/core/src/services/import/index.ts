@@ -9,3 +9,5 @@ export * from './ofx-parser.js';
 export * from './qif-parser.js';
 export * from './camt-parser.js';
 export * from './encoding.js';
+
+export * from './duplicate-planner.js';

@@ -390,6 +390,11 @@ export interface ImportTemplate {
 export type ImportSourceType = 'csv' | 'pdf' | 'ofx' | 'qif' | 'camt' | 'ynab-api' | 'ynab-zip';
 
 export interface ImportRunSummary {
+  duplicatesSkipped?: number;
+  userSkipped?: number;
+  invalidRows?: number;
+  failedRows?: number;
+  failures?: { index: number; message: string }[];
   transactionsImported: number;
   accountsCreated: number;
   categoriesCreated: number;
@@ -398,6 +403,7 @@ export interface ImportRunSummary {
 }
 
 export interface ImportRunRecordInput {
+  runKey?: string;
   budgetId: number;
   sourceType: ImportSourceType;
   sourceName: string;
@@ -405,7 +411,7 @@ export interface ImportRunRecordInput {
   transactionIds: number[];
   accountIds: number[];
   categoryIds: number[];
-  status?: 'completed' | 'completed_with_warnings';
+  status?: 'in_progress' | 'completed' | 'completed_with_warnings';
 }
 
 export interface ImportRun {
@@ -417,7 +423,7 @@ export interface ImportRun {
   transactionIds: number[];
   accountIds: number[];
   categoryIds: number[];
-  status: 'completed' | 'completed_with_warnings' | 'undone';
+  status: 'in_progress' | 'completed' | 'completed_with_warnings' | 'undone';
   createdAt: string;
 }
 

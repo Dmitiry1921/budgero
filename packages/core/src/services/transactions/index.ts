@@ -1,3 +1,4 @@
+import { ImportDuplicateService, type ImportIdentity } from '../import/duplicate-planner.js';
 import { DatabaseAdapter } from '../../database/interface.js';
 import { getRow, run } from '../../database/sql.js';
 import {
@@ -114,7 +115,8 @@ export class TransactionService {
     payee?: string,
     labelId?: number | null,
     exchangeRateOverride?: number | null,
-    excludeFromReadyToAssign = false
+    excludeFromReadyToAssign = false,
+    importIdentities: ImportIdentity[] = []
   ): Promise<number> {
     debugLog('🔵 TransactionService.addTransaction called with:', {
       inflowOriginal,
@@ -218,6 +220,10 @@ export class TransactionService {
     }
 
     const transactionId = this.db.transaction(() => {
+      const imports = new ImportDuplicateService(this.db);
+      const existing =
+        importIdentities[0] && imports.findOperation(importIdentities[0].operationId);
+      if (existing !== undefined) return existing;
       // Variables for overpayment split handling (need to be in outer scope)
       let needsOverpaymentSplit = false;
       let spendingAmount: MilliUnits = ZERO_MILLI;
@@ -562,6 +568,7 @@ export class TransactionService {
         debugLog('✅ Created overpayment splits');
       }
 
+      for (const identity of importIdentities) imports.record(id, identity);
       debugLog('✅ Transaction added successfully with ID:', id);
       return id;
     });

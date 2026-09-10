@@ -34,3 +34,27 @@ Typical Flow:
 Notes:
 - Export is pure data formatting here; actual file I/O, PDF rendering, or file downloads are handled by the app/server packages.
 - Keep column order and headers stable for external compatibility.
+
+## Statement duplicate detection
+
+CSV, PDF, OFX/QFX, QIF, and CAMT share an account-scoped review step. Exact
+file-row identities and reliable bank IDs are skipped by default. Other rows
+with the same native amount, direction, currency, and date need an explicit
+Skip or Import as new decision. Similar rows inside one file are reviewed;
+identical legitimate purchases are preserved. Every row is accessible through
+pagination and filters.
+
+`ImportDuplicateService` keeps immutable source identities in
+`import_provenance`, independently of import-history retention. Transaction
+creation and provenance insertion share one SQLite transaction, after currency
+resolution. An operation ID makes retries idempotent; intentional additional
+imports use new operation IDs. Deleting a transaction cascades its identities;
+transaction undo snapshots restore them. A reviewed skip may attach an identity
+to an existing transaction without changing its ledger fields or making it part
+of import-run undo.
+
+The wizard rechecks the preview before writing and checkpoints import history,
+including separate invalid, skipped, and failed counts. Old transactions without
+provenance remain possible matches. YNAB migration and bank sync are unchanged.
+Matching is local: simultaneous imports on disconnected devices cannot be
+prevented by this check.

@@ -215,6 +215,7 @@ export function createRuntimeDeps(): RuntimeCoordinatorDeps {
             trackCategoryGroupDeleted,
           }) => {
             switch (op) {
+              case 'transactions.import':
               case 'transactions.add':
                 trackTransactionLogged();
                 break;

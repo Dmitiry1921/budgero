@@ -1,7 +1,16 @@
-import type { ImportRunRecordInput } from '@budgero/core/browser';
+import type { ImportRunRecordInput, ImportIdentity } from '@budgero/core/browser';
 import { S, type OpCodeEntry } from '../shared';
 
 export const importHistoryOps = {
+  'importHistory.match': {
+    execute: async (args) => {
+      const tx = await S().transactions!.getTransactionByID(args.transactionId as number);
+      if (tx.BudgetID !== args.budgetId || tx.AccountID !== args.accountId)
+        throw new Error('Import destination changed');
+      S().importHistory!.duplicates.record(tx.ID, args.identity as ImportIdentity);
+    },
+    invalidates: [['importHistory']],
+  },
   'importHistory.record': {
     execute: async (args) => {
       return await S().importHistory!.recordImportRun(args.input as ImportRunRecordInput);

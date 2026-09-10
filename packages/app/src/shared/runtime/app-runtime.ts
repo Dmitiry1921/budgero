@@ -552,7 +552,7 @@ export class AppRuntime {
     isMutator: boolean
   ): Promise<void> {
     if (!isMutator) return;
-    const isTransactionAdd = spec.op === 'transactions.add';
+    const isTransactionAdd = spec.op === 'transactions.add' || spec.op === 'transactions.import';
     const isTransferAdd = spec.op === 'transactions.addTransfer';
     const isRecurringReady = spec.op === 'recurring.markReady';
 
@@ -562,7 +562,11 @@ export class AppRuntime {
     let budgetId: number | null = null;
 
     if (isTransactionAdd) {
-      transactionIds = [Number(result)];
+      if (spec.op === 'transactions.import') {
+        const imported = result as { transactionId: number; created: boolean };
+        if (!imported.created) return;
+        transactionIds = [imported.transactionId];
+      } else transactionIds = [Number(result)];
       budgetId = Number((spec.payload as PayloadWithBudgetId)?.budgetId);
     } else if (isTransferAdd) {
       const transfer = result as { sourceId?: unknown; destinationId?: unknown };

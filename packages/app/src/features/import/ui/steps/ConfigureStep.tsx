@@ -53,6 +53,7 @@ function DefaultAccountSelect({
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
+        <SelectItem value="-1">Create Import Account</SelectItem>
         {accounts?.map((account) => (
           <SelectItem key={account.ID} value={account.ID.toString()}>
             {account.Name} ({account.Currency})

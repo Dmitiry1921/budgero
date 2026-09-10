@@ -1,16 +1,10 @@
-/**
- * Preview Step Component
- *
- * Third step of the import wizard - preview parsed transactions.
- */
-
+import { useState } from 'react';
 import { Button } from '@shared/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
-import { Badge } from '@shared/ui/badge';
-import { CheckCircle, ArrowRight } from 'lucide-react';
 import type { PreviewRow, ColumnMapping, ImportConfig } from '@features/import/model/types';
 
 interface PreviewStepProps {
+  busy?: boolean;
   previewData: PreviewRow[];
   previewTotalCount: number;
   previewImportableCount: number;
@@ -20,106 +14,182 @@ interface PreviewStepProps {
   hasBudgetSelected: boolean;
   onBack: () => void;
   onStartImport: () => void;
+  onDecision: (index: number, decision: 'skip' | 'import') => void;
+  onResolveAll: (decision: 'skip' | 'import') => void;
 }
-
+const labels = {
+  new: 'New',
+  'already-imported': 'Already imported',
+  'needs-review': 'Needs review',
+  invalid: 'Invalid/skipped',
+};
 export function PreviewStep({
+  busy = false,
   previewData,
-  previewTotalCount,
-  previewImportableCount,
-  previewSkippedCount,
-  columnMapping,
-  importConfig,
   hasBudgetSelected,
   onBack,
   onStartImport,
+  onDecision,
+  onResolveAll,
 }: PreviewStepProps) {
-  const canImport = hasBudgetSelected && (columnMapping.account || importConfig.defaultAccountId);
-  const errorCount = previewData.filter((row) => row.errors.length > 0).length;
-  const isPreviewCapped = previewTotalCount > previewData.length;
-
+  const [filter, setFilter] = useState('all');
+  const [page, setPage] = useState(0);
+  const unresolved = previewData.filter(
+    (r) => r.duplicate.status === 'needs-review' && !r.decision
+  ).length;
+  const importing = previewData.filter(
+    (r) =>
+      r.input.valid &&
+      r.decision !== 'skip' &&
+      (r.duplicate.status === 'new' || r.decision === 'import')
+  ).length;
+  const filtered = previewData.filter((r) => filter === 'all' || r.duplicate.status === filter);
+  const pages = Math.max(1, Math.ceil(filtered.length / 50));
+  const currentPage = Math.min(page, pages - 1);
   return (
-    <Card className="mx-auto w-full max-w-4xl overflow-x-hidden">
+    <Card className="mx-auto w-full max-w-5xl overflow-hidden">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <CheckCircle className="h-5 w-5" />
-          Preview Import
-        </CardTitle>
-        <CardDescription>Review how your data will be imported before proceeding</CardDescription>
+        <CardTitle>Review import</CardTitle>
+        <CardDescription>
+          {importing} to import · {previewData.filter((r) => r.decision === 'skip').length} skipped
+          · {unresolved} need a decision
+        </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-6 overflow-x-hidden">
-        {previewData.length > 0 && (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-            <span className="font-medium">
-              {previewImportableCount}{' '}
-              {previewImportableCount === 1 ? 'transaction' : 'transactions'} will be imported
-            </span>
-            {previewSkippedCount > 0 && (
-              <Badge variant="secondary">
-                {previewSkippedCount} {previewSkippedCount === 1 ? 'row' : 'rows'} will be skipped
-                (no/unreadable amount)
-              </Badge>
-            )}
-            {isPreviewCapped && (
-              <span className="text-muted-foreground">
-                (showing first {previewData.length} below)
-              </span>
-            )}
-            {errorCount > 0 && (
-              <Badge variant="destructive">{errorCount} of the previewed rows have issues</Badge>
-            )}
-          </div>
-        )}
-
-        {previewData.length > 0 && (
-          <div className="border rounded-lg overflow-hidden">
-            <div className="overflow-x-auto max-h-96">
-              <table className="w-full text-sm">
-                <thead className="bg-muted">
-                  <tr>
-                    <th className="px-3 py-2 text-left">Date</th>
-                    <th className="px-3 py-2 text-left">Amount</th>
-                    <th className="px-3 py-2 text-left">Memo</th>
-                    <th className="px-3 py-2 text-left">Payee</th>
-                    <th className="px-3 py-2 text-left">Account</th>
-                    <th className="px-3 py-2 text-left">Errors</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {previewData.map((item, index) => (
-                    <tr key={index} className="border-t">
-                      <td className="px-3 py-2">{item.parsed.date || '—'}</td>
-                      <td className="px-3 py-2">
-                        {item.parsed.amount !== undefined
-                          ? `${item.parsed.amount >= 0 ? '+' : ''}${item.parsed.amount}`
-                          : `+${item.parsed.inflow || 0} / -${item.parsed.outflow || 0}`}
-                      </td>
-                      <td className="px-3 py-2 max-w-48 truncate">{item.parsed.memo || '—'}</td>
-                      <td className="px-3 py-2">{item.parsed.payee || '—'}</td>
-                      <td className="px-3 py-2">{item.parsed.account || 'Default Account'}</td>
-                      <td className="px-3 py-2">
-                        {item.errors.length > 0 && (
-                          <ul className="space-y-0.5 text-xs text-destructive">
-                            {item.errors.map((message, errorIndex) => (
-                              <li key={errorIndex}>{message}</li>
-                            ))}
-                          </ul>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap gap-2" aria-label="Filter import rows">
+          {['all', ...Object.keys(labels)].map((key) => (
+            <Button
+              key={key}
+              variant={filter === key ? 'default' : 'outline'}
+              onClick={() => {
+                setFilter(key);
+                setPage(0);
+              }}
+            >
+              {key === 'all' ? 'All' : labels[key as keyof typeof labels]} (
+              {previewData.filter((r) => key === 'all' || r.duplicate.status === key).length})
+            </Button>
+          ))}
+        </div>
+        {unresolved > 0 && (
+          <div className="space-y-2">
+            <p className="text-sm">
+              Review possible duplicates before importing. Skipping keeps the existing transaction
+              unchanged.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => onResolveAll('skip')}>
+                Skip all unresolved
+              </Button>
+              <Button variant="outline" onClick={() => onResolveAll('import')}>
+                Import all unresolved as new
+              </Button>
             </div>
           </div>
         )}
-
-        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-          <Button variant="outline" onClick={onBack} className="w-full sm:w-auto">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left">
+                <th>Row / account</th>
+                <th>Incoming transaction</th>
+                <th>Match / reason</th>
+                <th>Decision</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.slice(currentPage * 50, currentPage * 50 + 50).map((row) => (
+                <tr key={row.input.index} className="border-t align-top">
+                  <td className="p-2">
+                    {row.input.index + 1}
+                    <br />
+                    {row.parsed.account}
+                  </td>
+                  <td className="p-2">
+                    {row.input.date} · {(row.input.inflow - row.input.outflow) / 1000}{' '}
+                    {row.input.currency}
+                    <br />
+                    {row.input.payee}
+                    <br />
+                    <span className="break-words">{row.input.memo}</span>
+                  </td>
+                  <td className="p-2">
+                    <strong>{labels[row.duplicate.status]}</strong>
+                    <p>{row.duplicate.reason}</p>
+                    {row.duplicate.candidates.map((candidate) => (
+                      <p key={candidate.id} className="mt-2">
+                        Existing #{candidate.id}: {candidate.date} ·{' '}
+                        {(candidate.inflow - candidate.outflow) / 1000} {row.input.currency}
+                        <br />
+                        {candidate.payee}
+                        <br />
+                        {candidate.memo}
+                      </p>
+                    ))}
+                    {row.duplicate.sameFileIndex !== undefined && (
+                      <p>Compare with row {row.duplicate.sameFileIndex + 1} in this file.</p>
+                    )}
+                    {row.errors.map((message, i) => (
+                      <p key={i} className="text-destructive">
+                        {message}
+                      </p>
+                    ))}
+                  </td>
+                  <td className="p-2">
+                    {row.input.valid && (
+                      <div className="flex flex-col gap-2">
+                        <Button
+                          size="sm"
+                          variant={row.decision === 'skip' ? 'default' : 'outline'}
+                          onClick={() => onDecision(row.input.index, 'skip')}
+                        >
+                          Skip
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant={row.decision === 'import' ? 'default' : 'outline'}
+                          onClick={() => onDecision(row.input.index, 'import')}
+                        >
+                          {row.duplicate.status === 'already-imported'
+                            ? 'Import anyway'
+                            : 'Import as new'}
+                        </Button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <Button
+            variant="outline"
+            disabled={currentPage === 0}
+            onClick={() => setPage(currentPage - 1)}
+          >
+            Previous
+          </Button>
+          <span>
+            Page {currentPage + 1} of {pages}
+          </span>
+          <Button
+            variant="outline"
+            disabled={currentPage + 1 >= pages}
+            onClick={() => setPage(currentPage + 1)}
+          >
+            Next
+          </Button>
+        </div>
+        {!importing && !unresolved && <p>Nothing new to import.</p>}
+        <div className="flex justify-between gap-2">
+          <Button variant="outline" onClick={onBack} disabled={busy}>
             Back to Configuration
           </Button>
-          <Button onClick={onStartImport} disabled={!canImport} className="w-full sm:w-auto">
-            Start Import
-            <ArrowRight className="ml-2 h-4 w-4" />
+          <Button disabled={busy || !hasBudgetSelected || unresolved > 0} onClick={onStartImport}>
+            {importing
+              ? `Import ${importing} ${importing === 1 ? 'transaction' : 'transactions'}`
+              : 'Finish'}
           </Button>
         </div>
       </CardContent>

@@ -156,6 +156,12 @@ export default function ImportsPage() {
                       </TableCell>
                       <TableCell className="text-center">
                         {run.summary.transactionsImported}
+                        <div className="text-xs text-muted-foreground">
+                          {run.summary.duplicatesSkipped ?? 0} duplicates ·{' '}
+                          {run.summary.userSkipped ?? 0} user skipped ·{' '}
+                          {run.summary.invalidRows ?? 0} invalid · {run.summary.failedRows ?? 0}{' '}
+                          failed
+                        </div>
                       </TableCell>
                       <TableCell className="text-center">
                         {run.summary.accountsCreated > 0 ? run.summary.accountsCreated : '—'}
@@ -169,7 +175,9 @@ export default function ImportsPage() {
                             ? 'Undone'
                             : run.status === 'completed_with_warnings'
                               ? 'Warning accepted'
-                              : 'Completed'}
+                              : run.status === 'in_progress'
+                                ? 'In progress / interrupted'
+                                : 'Completed'}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">

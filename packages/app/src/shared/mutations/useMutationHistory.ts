@@ -123,6 +123,7 @@ export function useClearMutationHistory() {
 export function formatOpCode(op: string): string {
   const opLabels: Record<string, string> = {
     'transactions.add': 'Add Transaction',
+    'transactions.import': 'Import Transaction',
     'transactions.addTransfer': 'Add Transfer',
     'transactions.updateColumn': 'Update Transaction',
     'transactions.delete': 'Delete Transaction',

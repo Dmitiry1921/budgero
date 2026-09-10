@@ -22,7 +22,9 @@ export function CompleteStep({ importSummary, onReset }: CompleteStepProps) {
           <CheckCircle className="h-5 w-5 text-green-600" />
           Import Complete!
         </CardTitle>
-        <CardDescription>Your data has been successfully imported</CardDescription>
+        <CardDescription>
+          Review the results below. Failed rows can be retried by importing the file again.
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
         {importSummary && (
@@ -33,12 +35,24 @@ export function CompleteStep({ importSummary, onReset }: CompleteStepProps) {
                 <span>Transactions imported:</span>
                 <span className="font-medium">{importSummary.transactionsImported}</span>
               </li>
-              {(importSummary.transactionsSkipped ?? 0) > 0 && (
-                <li className="flex justify-between">
-                  <span>Rows skipped (no/unreadable amount):</span>
-                  <span className="font-medium">{importSummary.transactionsSkipped}</span>
+              {(
+                [
+                  ['Duplicates skipped', importSummary.duplicatesSkipped],
+                  ['User skipped', importSummary.userSkipped],
+                  ['Invalid rows', importSummary.invalidRows],
+                  ['Failed rows', importSummary.failedRows],
+                ] as const
+              ).map(([label, count]) => (
+                <li key={label} className="flex justify-between">
+                  <span>{label}:</span>
+                  <span>{count ?? 0}</span>
                 </li>
-              )}
+              ))}
+              {importSummary.failures?.map((failure) => (
+                <li key={failure.index} className="text-destructive">
+                  Row {failure.index + 1}: {failure.message}
+                </li>
+              ))}
               <li className="flex justify-between">
                 <span>Destination account:</span>
                 <span className="font-medium">

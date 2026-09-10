@@ -11,6 +11,12 @@ export function CSVPDFImportDialog() {
   return (
     <div className="space-y-6">
       <ImportStepHeader currentStep={state.currentStep} />
+      {state.error && state.currentStep !== 'import' && (
+        <p role="alert" className="text-destructive">
+          {state.error}
+        </p>
+      )}
+      {state.isChecking && <p role="status">Checking for duplicates…</p>}
 
       {state.currentStep === 'upload' && (
         <UploadStep
@@ -52,6 +58,9 @@ export function CSVPDFImportDialog() {
 
       {state.currentStep === 'preview' && (
         <PreviewStep
+          busy={state.isChecking}
+          onDecision={state.setRowDecision}
+          onResolveAll={state.resolveAll}
           previewData={state.previewData}
           previewTotalCount={state.previewTotalCount}
           previewImportableCount={state.previewImportableCount}

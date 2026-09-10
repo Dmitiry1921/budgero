@@ -1,4 +1,4 @@
-import { asMilli } from '@budgero/core/browser';
+import { type ImportIdentity, asMilli } from '@budgero/core/browser';
 import {
   S,
   sortTransactionSnapshots,
@@ -87,7 +87,7 @@ const TX_MOVE_INVALIDATION_KEYS: string[][] = [
 ];
 
 async function addTransactionFromArgs(args: Record<string, unknown>): Promise<number> {
-  return await S().transactions!.addTransaction(
+  const parameters = [
     asMilli(Number(args.inflow ?? 0)),
     asMilli(Number(args.outflow ?? 0)),
     args.accountId as number,
@@ -98,11 +98,43 @@ async function addTransactionFromArgs(args: Record<string, unknown>): Promise<nu
     (args.transferId as string | undefined) || '',
     (args.payee as string | undefined) ?? '',
     (args.labelId as number | null | undefined) ?? null,
-    typeof args.exchangeRateOverride === 'number' ? (args.exchangeRateOverride as number) : null
-  );
+    typeof args.exchangeRateOverride === 'number' ? (args.exchangeRateOverride as number) : null,
+  ] as const;
+  return args.importIdentities
+    ? S().transactions!.addTransaction(
+        ...parameters,
+        false,
+        args.importIdentities as ImportIdentity[]
+      )
+    : S().transactions!.addTransaction(...parameters);
+}
+
+function withImportIdentities(tx: TransactionSnapshot): TransactionSnapshot {
+  return {
+    ...tx,
+    importIdentities: tx.ID ? (S().importHistory?.duplicates.identities(tx.ID) ?? []) : [],
+  };
 }
 
 export const transactionOps = {
+  'transactions.import': {
+    execute: async (args) => {
+      const identity = (args.importIdentities as ImportIdentity[] | undefined)?.[0];
+      if (!identity) throw new Error('Import identity is required');
+      const existing = S().importHistory!.duplicates.findOperation(identity.operationId);
+      if (existing !== undefined) return { transactionId: existing, created: false };
+      return { transactionId: await addTransactionFromArgs(args), created: true };
+    },
+    invalidates: [...TRANSACTION_INVALIDATION_KEYS],
+    undo: {
+      build: (_args, result) => {
+        const imported = result as { transactionId: number; created: boolean };
+        return imported.created
+          ? [{ op: 'transactions.delete', args: { id: imported.transactionId } }]
+          : [];
+      },
+    },
+  },
   'transactions.add': {
     execute: addTransactionFromArgs,
     invalidates: [...TRANSACTION_INVALIDATION_KEYS],
@@ -303,9 +335,13 @@ export const transactionOps = {
           const tx = await S().transactions!.getTransactionByID(args.id as number);
           if (tx?.TransferID) {
             const group = await S().transactions!.getTransactionsByTransferID(tx.TransferID);
-            return { snapshots: Array.isArray(group) && group.length > 0 ? group : [tx] };
+            return {
+              snapshots: (Array.isArray(group) && group.length > 0 ? group : [tx]).map(
+                withImportIdentities
+              ),
+            };
           }
-          return { snapshots: [tx] };
+          return { snapshots: [withImportIdentities(tx)] };
         } catch {
           return { snapshots: [] };
         }
@@ -328,7 +364,11 @@ export const transactionOps = {
     undo: {
       capture: async (args) => {
         const ids = Array.isArray(args.ids) ? args.ids.map(Number) : [];
-        return { snapshots: await S().transactions!.getTransactionsForDelete(ids) };
+        return {
+          snapshots: (await S().transactions!.getTransactionsForDelete(ids)).map(
+            withImportIdentities
+          ),
+        };
       },
       build: (_args, _result, before) => {
         const beforeState = before as { snapshots?: TransactionSnapshot[] } | undefined;
@@ -352,19 +392,7 @@ export const transactionOps = {
 
       for (const snapshot of snapshots) {
         const addArgs = transactionSnapshotToAddOp(snapshot).args;
-        await S().transactions!.addTransaction(
-          asMilli(Number(addArgs.inflow ?? 0)),
-          asMilli(Number(addArgs.outflow ?? 0)),
-          Number(addArgs.accountId),
-          Number(addArgs.categoryId),
-          Number(addArgs.budgetId),
-          String(addArgs.date ?? ''),
-          String(addArgs.memo ?? ''),
-          String(addArgs.transferId ?? ''),
-          String(addArgs.payee ?? ''),
-          addArgs.labelId == null ? null : Number(addArgs.labelId),
-          typeof addArgs.exchangeRateOverride === 'number' ? addArgs.exchangeRateOverride : null
-        );
+        await addTransactionFromArgs(addArgs);
       }
     },
     invalidates: TX_WRITE_INVALIDATION_KEYS,

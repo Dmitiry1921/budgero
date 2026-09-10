@@ -1,3 +1,4 @@
+import type { DuplicatePlan, DuplicateInput } from '@budgero/core/browser';
 /**
  * Import Feature Types
  *
@@ -72,6 +73,11 @@ export interface ImportProgress {
 }
 
 export interface ImportSummary {
+  duplicatesSkipped?: number;
+  userSkipped?: number;
+  invalidRows?: number;
+  failedRows?: number;
+  failures?: { index: number; message: string }[];
   budgetId: number;
   transactionsImported: number;
   /** Rows that were not imported (no amount / unparseable amount / failed). */
@@ -82,6 +88,9 @@ export interface ImportSummary {
 }
 
 export interface PreviewRow {
+  input: DuplicateInput;
+  duplicate: DuplicatePlan;
+  decision?: 'skip' | 'import';
   original: Record<string, string>;
   parsed: {
     date?: string;

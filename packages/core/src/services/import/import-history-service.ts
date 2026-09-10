@@ -1,3 +1,4 @@
+import { ImportDuplicateService } from './duplicate-planner.js';
 import { DatabaseAdapter } from '../../database/interface.js';
 import { getRow, allRows, run } from '../../database/sql.js';
 import { TransactionQueries } from '../transactions/queries.js';
@@ -38,6 +39,11 @@ function parseSummary(value: string): ImportRunSummary {
   try {
     const parsed = JSON.parse(value);
     return {
+      duplicatesSkipped: Number(parsed.duplicatesSkipped) || 0,
+      userSkipped: Number(parsed.userSkipped) || 0,
+      invalidRows: Number(parsed.invalidRows) || 0,
+      failedRows: Number(parsed.failedRows) || 0,
+      failures: Array.isArray(parsed.failures) ? parsed.failures : [],
       transactionsImported: Number(parsed.transactionsImported) || 0,
       accountsCreated: Number(parsed.accountsCreated) || 0,
       categoriesCreated: Number(parsed.categoriesCreated) || 0,
@@ -67,11 +73,29 @@ function mapRow(row: ImportRunRow): ImportRun {
 export class ImportHistoryService {
   constructor(private readonly db: DatabaseAdapter) {}
 
+  get duplicates(): ImportDuplicateService {
+    return new ImportDuplicateService(this.db);
+  }
+
   recordImportRun(input: ImportRunRecordInput): number {
+    // Retrying an interrupted wizard must not discard ownership of earlier successes.
+    const previous = input.runKey
+      ? getRow<ImportRunRow>(this.db, 'SELECT * FROM import_runs WHERE RunKey=?', input.runKey)
+      : undefined;
+    if (previous && (previous.BudgetID !== input.budgetId || previous.Status === 'undone')) {
+      throw new Error('This import attempt is no longer active. Upload the file again.');
+    }
+    const merge = (prior: string | undefined, ids: number[]) => [
+      ...new Set([...parseJsonArray(prior), ...ids]),
+    ];
+    const transactionIds = merge(previous?.TransactionIDs, input.transactionIds ?? []);
+    const accountIds = merge(previous?.AccountIDs, input.accountIds ?? []);
+    const categoryIds = merge(previous?.CategoryIDs, input.categoryIds ?? []);
     const result = run(
       this.db,
       `
         INSERT INTO import_runs (
+          RunKey,
           BudgetID,
           SourceType,
           SourceName,
@@ -82,28 +106,38 @@ export class ImportHistoryService {
           Status,
           CreatedAt
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(RunKey) DO UPDATE SET SummaryJSON=excluded.SummaryJSON,
+          TransactionIDs=excluded.TransactionIDs, AccountIDs=excluded.AccountIDs,
+          CategoryIDs=excluded.CategoryIDs, Status=excluded.Status
       `,
+      input.runKey ?? null,
       input.budgetId,
       input.sourceType,
       input.sourceName,
       JSON.stringify({
-        transactionsImported: input.summary.transactionsImported,
-        accountsCreated: input.summary.accountsCreated,
-        categoriesCreated: input.summary.categoriesCreated,
+        ...input.summary,
+        transactionsImported: input.runKey
+          ? transactionIds.length
+          : input.summary.transactionsImported,
+        accountsCreated: input.runKey ? accountIds.length : input.summary.accountsCreated,
+        categoriesCreated: input.runKey ? categoryIds.length : input.summary.categoriesCreated,
         ...(input.summary.verification ? { verification: input.summary.verification } : {}),
         ...(input.summary.acceptedWithWarnings === true ? { acceptedWithWarnings: true } : {}),
       }),
-      JSON.stringify(input.transactionIds ?? []),
-      JSON.stringify(input.accountIds ?? []),
-      JSON.stringify(input.categoryIds ?? []),
+      JSON.stringify(transactionIds),
+      JSON.stringify(accountIds),
+      JSON.stringify(categoryIds),
       input.status ?? 'completed'
     );
     const insertedId =
       typeof result.lastInsertRowid === 'bigint'
         ? Number(result.lastInsertRowid)
         : (result.lastInsertRowid as number);
-    return insertedId;
+    return input.runKey
+      ? getRow<{ ID: number }>(this.db, 'SELECT ID FROM import_runs WHERE RunKey=?', input.runKey)!
+          .ID
+      : insertedId;
   }
 
   listImportRuns(budgetId: number, limit = 50): ImportRun[] {

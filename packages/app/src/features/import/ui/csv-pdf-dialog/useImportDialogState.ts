@@ -9,7 +9,7 @@ import {
   useCategoryGroups,
 } from '@entities/category/api/useCategories';
 import { useAddAccount, useAccounts } from '@entities/account/api/useAccounts';
-import { useAddTransaction } from '@entities/transaction/api/useTransactions';
+import { executeSpaceMutation } from '@shared/runtime/mutation-router';
 import { useRecordImportRun } from '@features/import/api/useImportHistory';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUiStore } from '@shared/store/useUiStore';
@@ -32,11 +32,10 @@ import {
 import {
   detectColumnMapping,
   parseDelimitedText,
-  planImportRows,
   createImportNameMaps,
   resolveImportCategoryId,
 } from '@budgero/core/browser';
-import { toDecimal } from '@shared/lib/currency/milli';
+import { buildFileImportPreview } from '@features/import/lib/plan-file-import';
 import { trackImportedCsvPdf } from '@shared/lib/analytics/analytics';
 import { parseImportFile } from '@features/import/lib/parse-import-file';
 import { useImportTemplates } from './useImportTemplates';
@@ -53,6 +52,9 @@ export interface ImportDialogState {
   importConfig: ImportConfig;
   setImportConfig: (config: ImportConfig) => void;
   previewData: PreviewRow[];
+  setRowDecision: (index: number, decision: 'skip' | 'import') => void;
+  resolveAll: (decision: 'skip' | 'import') => void;
+  isChecking: boolean;
   previewTotalCount: number;
   previewImportableCount: number;
   previewSkippedCount: number;
@@ -88,23 +90,45 @@ export interface ImportDialogState {
   resetForm: () => void;
 }
 
+function withDecision(row: PreviewRow, decision: 'skip' | 'import'): PreviewRow {
+  if (row.decision === decision) return row;
+  return {
+    ...row,
+    decision,
+    input:
+      decision === 'import' && row.duplicate.status !== 'new'
+        ? { ...row.input, operationId: `${row.input.operationId}:override:${crypto.randomUUID()}` }
+        : row.input,
+  };
+}
+
 export function useImportDialogState(): ImportDialogState {
   const [currentStep, setCurrentStep] = useState<ImportStep>('upload');
   const [parsedData, setParsedData] = useState<ParsedData | null>(null);
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>({});
   const [importConfig, setImportConfig] = useState<ImportConfig>(DEFAULT_IMPORT_CONFIG);
-  const [_isImporting, setIsImporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewData, setPreviewData] = useState<PreviewRow[]>([]);
-  // Total number of rows that will actually be imported (post skip-rows and
-  // post per-row exclusion). `previewData` is capped at 500, but the import
-  // operates on the full set, so we track the count separately for the UI.
+  const [isChecking, setIsChecking] = useState(false);
+  const importLock = useRef(false);
+  const runKey = useRef(crypto.randomUUID());
+  const previewGeneration = useRef(0);
+  const setRowDecision = (index: number, decision: 'skip' | 'import') =>
+    setPreviewData((rows) =>
+      rows.map((row) => (row.input.index === index ? withDecision(row, decision) : row))
+    );
+  const resolveAll = (decision: 'skip' | 'import') =>
+    setPreviewData((rows) =>
+      rows.map((row) =>
+        row.duplicate.status === 'needs-review' && !row.decision ? withDecision(row, decision) : row
+      )
+    );
+  // Counts cover the full statement, independently of preview pagination.
   const [previewTotalCount, setPreviewTotalCount] = useState(0);
-  // Of the rows that will be processed, how many will actually import vs be
-  // skipped (no/unparseable amount). Computed over the full set, not just the
-  // 500-row preview, so the wizard reports the truth instead of "all rows".
+
   const [previewImportableCount, setPreviewImportableCount] = useState(0);
   const [previewSkippedCount, setPreviewSkippedCount] = useState(0);
   const [selectedHeaderIndex, setSelectedHeaderIndex] = useState<number | null>(null);
@@ -129,7 +153,6 @@ export function useImportDialogState(): ImportDialogState {
   const addCategoryGroupMutation = useAddCategoryGroup();
   const addCategoryMutation = useAddCategory();
   const addAccountMutation = useAddAccount();
-  const addTransactionMutation = useAddTransaction();
 
   const {
     templates,
@@ -161,6 +184,8 @@ export function useImportDialogState(): ImportDialogState {
   }, [pendingImportFile, setPendingImportFile]);
 
   const resetForm = useCallback(() => {
+    runKey.current = crypto.randomUUID();
+    previewGeneration.current++;
     setCurrentStep('upload');
     setParsedData(null);
     setColumnMapping({});
@@ -186,6 +211,7 @@ export function useImportDialogState(): ImportDialogState {
 
   const processSelectedFile = useCallback(
     async (selectedFile: File) => {
+      runKey.current = crypto.randomUUID();
       setError(null);
       setSkippedRowIndices(new Set());
 
@@ -319,65 +345,62 @@ export function useImportDialogState(): ImportDialogState {
     });
   }, []);
 
-  const generatePreview = useCallback(() => {
-    if (!parsedData) return;
+  const buildPreview = useCallback(async (): Promise<PreviewRow[]> => {
+    if (!parsedData || !selectedBudget) return [];
+    return buildFileImportPreview({
+      parsedData,
+      budgetId: selectedBudget.ID,
+      columnMapping,
+      importConfig,
+      accounts: runtime.services().accounts.listAccounts(selectedBudget.ID),
+      skippedRowIndices,
+      selectedHeaderIndex,
+      runKey: runKey.current,
+      duplicates: runtime.services().importHistory.duplicates,
+    });
+  }, [
+    parsedData,
+    selectedBudget,
+    columnMapping,
+    importConfig,
+    skippedRowIndices,
+    selectedHeaderIndex,
+    runtime,
+  ]);
 
+  const generatePreview = useCallback(async () => {
+    const generation = ++previewGeneration.current;
+    setIsChecking(true);
+    setError(null);
     try {
-      const includedRows = parsedData.rows.filter((_, index) => !skippedRowIndices.has(index));
-
-      // Plan every row (cheap, pure) so the counts reflect the whole file, then
-      // render only the first 500. The plan is the exact same logic the import
-      // runs, so the preview can no longer disagree with what actually imports.
-      const plans = planImportRows(includedRows, columnMapping, importConfig);
-      const importableCount = plans.filter((plan) => plan.status === 'ready').length;
-
-      const preview: PreviewRow[] = plans.slice(0, 500).map((plan) => {
-        const row = includedRows[plan.index];
-        const parsed: PreviewRow['parsed'] = { date: plan.date };
-
-        if (columnMapping.amount) {
-          // Only show a number for rows we could actually read. Planned rows
-          // carry milliunits; the preview displays decimals.
-          if (plan.status === 'ready') {
-            parsed.amount = plan.inflow > 0 ? toDecimal(plan.inflow) : -toDecimal(plan.outflow);
-          }
-        } else if (columnMapping.inflow || columnMapping.outflow) {
-          parsed.inflow = toDecimal(plan.inflow);
-          parsed.outflow = toDecimal(plan.outflow);
-        }
-
-        if (plan.payee) parsed.payee = plan.payee;
-        if (columnMapping.memo) parsed.memo = plan.memo;
-        if (columnMapping.account && row[columnMapping.account]) {
-          parsed.account = row[columnMapping.account];
-        }
-
-        return { original: row, parsed, errors: plan.errors };
-      });
-
+      const preview = await buildPreview();
+      if (generation !== previewGeneration.current) return;
       setPreviewData(preview);
-      setPreviewTotalCount(includedRows.length);
-      setPreviewImportableCount(importableCount);
-      setPreviewSkippedCount(includedRows.length - importableCount);
+      setPreviewTotalCount(preview.length);
+      setPreviewImportableCount(preview.filter((row) => row.duplicate.status === 'new').length);
+      setPreviewSkippedCount(preview.filter((row) => row.duplicate.status === 'invalid').length);
       setCurrentStep('preview');
     } catch (err) {
-      console.error('Preview generation error:', err);
-      setError(getErrorMessage(err, 'Failed to generate preview'));
+      setError(getErrorMessage(err, 'Failed to check duplicates'));
+    } finally {
+      if (generation === previewGeneration.current) setIsChecking(false);
     }
-  }, [parsedData, columnMapping, importConfig, skippedRowIndices]);
+  }, [buildPreview]);
 
-  const resolveAccountId = useCallback(
-    (row: Record<string, string>, defaultAccountId: number): number => {
-      if (!columnMapping.account) return defaultAccountId;
-      const accountName = row[columnMapping.account]?.trim();
-      if (!accountName) return defaultAccountId;
-      const matchingAccount = accounts?.find(
-        (account) => account.Name.toLowerCase() === accountName.toLowerCase()
-      );
-      return matchingAccount?.ID ?? defaultAccountId;
-    },
-    [columnMapping.account, accounts]
-  );
+  // A preview belongs to exactly one parsing configuration and destination.
+  useEffect(() => {
+    previewGeneration.current++;
+    setIsChecking(false);
+    setPreviewData([]);
+    setCurrentStep((step) => (step === 'preview' ? 'configure' : step));
+  }, [
+    parsedData,
+    columnMapping,
+    importConfig,
+    skippedRowIndices,
+    selectedBudget?.ID,
+    selectedHeaderIndex,
+  ]);
 
   const resolveCategoryId = useCallback(
     async (
@@ -409,7 +432,113 @@ export function useImportDialogState(): ImportDialogState {
   );
 
   const handleImport = useCallback(async () => {
-    if (!parsedData || !selectedBudget?.ID) return;
+    if (!parsedData || !selectedBudget?.ID || importLock.current) return;
+    importLock.current = true;
+    const generation = previewGeneration.current;
+    setIsChecking(true);
+    let fresh: PreviewRow[];
+    try {
+      fresh = await buildPreview();
+      if (generation !== previewGeneration.current) {
+        importLock.current = false;
+        return;
+      }
+      const signature = (rows: PreviewRow[]) =>
+        JSON.stringify(rows.map((r) => [r.input.fileRowKey, r.input.accountId, r.duplicate]));
+      if (signature(fresh) !== signature(previewData)) {
+        setPreviewData(fresh);
+        setCurrentStep('preview');
+        setError('Transactions or destinations changed. Please review the updated matches.');
+        importLock.current = false;
+        return;
+      }
+      fresh = fresh.map((row, index) => ({
+        ...row,
+        decision: previewData[index].decision,
+        input: { ...row.input, operationId: previewData[index].input.operationId },
+      }));
+      if (fresh.some((r) => r.duplicate.status === 'needs-review' && !r.decision)) {
+        importLock.current = false;
+        return;
+      }
+    } catch (err) {
+      setError(getErrorMessage(err, 'Duplicate check failed'));
+      importLock.current = false;
+      return;
+    } finally {
+      setIsChecking(false);
+    }
+    const selectedRows = fresh.filter((r) => r.input.valid && r.decision !== 'skip');
+    let duplicatesSkipped = fresh.filter(
+      (r) => r.input.valid && r.decision === 'skip' && r.duplicate.status !== 'new'
+    ).length;
+    const userSkipped =
+      skippedRowIndices.size +
+      fresh.filter((r) => r.input.valid && r.decision === 'skip' && r.duplicate.status === 'new')
+        .length;
+    const invalidRows = fresh.filter(
+      (r) => !r.input.valid && !skippedRowIndices.has(r.input.index)
+    ).length;
+    if (!selectedRows.length) {
+      try {
+        const matchedIds = new Map<number, number>();
+        for (const reviewed of fresh) {
+          const candidate =
+            reviewed.duplicate.candidates[0]?.id ??
+            (reviewed.duplicate.sameFileIndex !== undefined
+              ? matchedIds.get(reviewed.duplicate.sameFileIndex)
+              : undefined);
+          if (candidate !== undefined) matchedIds.set(reviewed.input.index, candidate);
+          if (
+            reviewed.input.valid &&
+            reviewed.decision === 'skip' &&
+            reviewed.duplicate.status !== 'already-imported' &&
+            candidate !== undefined
+          ) {
+            await executeSpaceMutation(runtime, {
+              op: 'importHistory.match',
+              payload: {
+                budgetId: reviewed.input.budgetId,
+                accountId: reviewed.input.accountId,
+                transactionId: candidate,
+                identity: reviewed.input,
+              },
+              meta: { skipUndo: true },
+            });
+          }
+        }
+        const summary = {
+          budgetId: selectedBudget.ID,
+          transactionsImported: 0,
+          duplicatesSkipped,
+          userSkipped,
+          invalidRows,
+          failedRows: 0,
+          accountsCreated: 0,
+          categoriesCreated: 0,
+        };
+        await recordImportRunMutation.mutateAsync({
+          budgetId: selectedBudget.ID,
+          input: {
+            runKey: runKey.current,
+            budgetId: selectedBudget.ID,
+            sourceType: parsedData.source.type,
+            sourceName: parsedData.source.fileName,
+            summary,
+            transactionIds: [],
+            accountIds: [],
+            categoryIds: [],
+          },
+        });
+        setImportSummary(summary);
+        setCurrentStep('complete');
+      } catch (err) {
+        setError(getErrorMessage(err, 'Could not finish import'));
+      } finally {
+        importLock.current = false;
+      }
+      return;
+    }
 
     setIsImporting(true);
     setCurrentStep('import');
@@ -485,8 +614,8 @@ export function useImportDialogState(): ImportDialogState {
       });
 
       let defaultAccountId: number;
-      if (typeof importConfig.defaultAccountId === 'number') {
-        defaultAccountId = importConfig.defaultAccountId;
+      if (!selectedRows.some((row) => row.input.accountId === -1)) {
+        defaultAccountId = selectedRows[0].input.accountId;
         const selectedAccount = accounts?.find(
           (account) => account.ID === importConfig.defaultAccountId
         );
@@ -510,9 +639,38 @@ export function useImportDialogState(): ImportDialogState {
       // logic the preview displayed — which rows produce a transaction and
       // which are skipped because their amount is missing or unparseable, so
       // the import can no longer silently disagree with the preview.
-      const rowsToImport = parsedData.rows.filter((_, index) => !skippedRowIndices.has(index));
-      const plans = planImportRows(rowsToImport, columnMapping, importConfig);
-      const totalRows = rowsToImport.length;
+      const totalRows = fresh.length;
+      const failures: { index: number; message: string }[] = [];
+      const matchedIds = new Map<number, number>();
+      const checkpoint = async (complete = false) =>
+        recordImportRunMutation.mutateAsync({
+          budgetId,
+          input: {
+            runKey: runKey.current,
+            budgetId,
+            sourceType: parsedData.source.type,
+            sourceName: parsedData.source.fileName,
+            summary: {
+              transactionsImported: importedTransactionIds.length,
+              accountsCreated: createdAccountIds.length,
+              categoriesCreated: createdCategoryIds.length,
+              duplicatesSkipped,
+              userSkipped,
+              invalidRows,
+              failedRows: failures.length,
+              failures,
+            },
+            transactionIds: importedTransactionIds,
+            accountIds: createdAccountIds,
+            categoryIds: createdCategoryIds,
+            status: !complete
+              ? 'in_progress'
+              : failures.length
+                ? 'completed_with_warnings'
+                : 'completed',
+          },
+        });
+      await checkpoint();
       let processedCount = 0;
       let successCount = 0;
 
@@ -521,8 +679,9 @@ export function useImportDialogState(): ImportDialogState {
       const resolvedIncomeId = incomeId ?? 0;
       const resolvedUncategorizedId = uncategorizedId ?? 0;
 
-      for (const plan of plans) {
-        const row = rowsToImport[plan.index];
+      for (const reviewed of fresh) {
+        const plan = reviewed.input;
+        const row = reviewed.original;
         try {
           setProgress({
             step: 'Importing transactions...',
@@ -531,8 +690,31 @@ export function useImportDialogState(): ImportDialogState {
             isComplete: false,
           });
 
-          if (plan.status !== 'ready') {
+          if (!plan.valid) {
             // Missing or unparseable amount — already surfaced in the preview.
+            processedCount++;
+            continue;
+          }
+
+          if (reviewed.decision === 'skip') {
+            const candidate =
+              reviewed.duplicate.candidates[0]?.id ??
+              (reviewed.duplicate.sameFileIndex !== undefined
+                ? matchedIds.get(reviewed.duplicate.sameFileIndex)
+                : undefined);
+            if (candidate !== undefined && reviewed.duplicate.status !== 'already-imported') {
+              await executeSpaceMutation(runtime, {
+                op: 'importHistory.match',
+                payload: {
+                  budgetId,
+                  accountId: plan.accountId === -1 ? defaultAccountId : plan.accountId,
+                  transactionId: candidate,
+                  identity: plan,
+                },
+                meta: { skipUndo: true },
+              });
+            }
+            if (candidate !== undefined) matchedIds.set(plan.index, candidate);
             processedCount++;
             continue;
           }
@@ -549,25 +731,41 @@ export function useImportDialogState(): ImportDialogState {
             }
           );
 
-          const transactionId = await addTransactionMutation.mutateAsync({
-            inflow: plan.inflow,
-            outflow: plan.outflow,
-            accountId: resolveAccountId(row, defaultAccountId),
-            categoryId,
-            budgetId,
-            date: plan.date,
-            memo: plan.memo.substring(0, 255),
-            payee: plan.payee,
-            transferId: '',
+          const { transactionId } = await executeSpaceMutation<{
+            transactionId: number;
+            created: boolean;
+          }>(runtime, {
+            op: 'transactions.import',
+            payload: {
+              inflow: plan.inflow,
+              outflow: plan.outflow,
+              accountId: plan.accountId === -1 ? defaultAccountId : plan.accountId,
+              categoryId,
+              budgetId,
+              date: plan.date,
+              memo: plan.memo.substring(0, 255),
+              payee: plan.payee,
+              transferId: '',
+              importIdentities: [plan],
+            },
+            meta: { label: 'Import transaction', skipInvalidate: true },
           });
+          matchedIds.set(plan.index, transactionId);
 
           importedTransactionIds.push(transactionId);
           successCount++;
         } catch (rowError) {
-          console.warn(`Failed to import row ${processedCount + 1}:`, rowError);
+          if (reviewed.decision === 'skip' && reviewed.duplicate.status !== 'new')
+            duplicatesSkipped--;
+          failures.push({
+            index: plan.index,
+            message: getErrorMessage(rowError, 'Failed to import row'),
+          });
         }
 
         processedCount++;
+        // A history-write error stops the run; it must not relabel a committed row as failed.
+        await checkpoint();
       }
 
       const skippedCount = totalRows - successCount;
@@ -599,6 +797,11 @@ export function useImportDialogState(): ImportDialogState {
         budgetId,
         transactionsImported: successCount,
         transactionsSkipped: skippedCount,
+        duplicatesSkipped,
+        userSkipped,
+        invalidRows,
+        failedRows: failures.length,
+        failures,
         accountsCreated: createdAccountIds.length,
         categoriesCreated: createdCategoryIds.length,
         destinationAccountName,
@@ -606,28 +809,7 @@ export function useImportDialogState(): ImportDialogState {
 
       trackImportedCsvPdf();
 
-      if (parsedData.source) {
-        try {
-          await recordImportRunMutation.mutateAsync({
-            budgetId,
-            input: {
-              budgetId,
-              sourceType: parsedData.source.type,
-              sourceName: parsedData.source.fileName,
-              summary: {
-                transactionsImported: successCount,
-                accountsCreated: createdAccountIds.length,
-                categoriesCreated: createdCategoryIds.length,
-              },
-              transactionIds: importedTransactionIds,
-              accountIds: createdAccountIds,
-              categoryIds: createdCategoryIds,
-            },
-          });
-        } catch (historyError) {
-          console.warn('[CSVPDFImportDialog] Failed to record import history', historyError);
-        }
-      }
+      await checkpoint(true);
 
       if (budgets) {
         const newBudget = budgets.find((b) => b.ID === budgetId);
@@ -645,8 +827,10 @@ export function useImportDialogState(): ImportDialogState {
     } catch (err) {
       console.error('Import error:', err);
       setError(getErrorMessage(err, 'Import failed'));
+      setCurrentStep('configure');
     } finally {
       setIsImporting(false);
+      importLock.current = false;
     }
   }, [
     parsedData,
@@ -664,8 +848,8 @@ export function useImportDialogState(): ImportDialogState {
     addCategoryGroupMutation,
     addCategoryMutation,
     addAccountMutation,
-    addTransactionMutation,
-    resolveAccountId,
+    buildPreview,
+    previewData,
     resolveCategoryId,
     runtime,
     recordImportRunMutation,
@@ -683,6 +867,9 @@ export function useImportDialogState(): ImportDialogState {
     importConfig,
     setImportConfig,
     previewData,
+    setRowDecision,
+    resolveAll,
+    isChecking: isChecking || isImporting,
     previewTotalCount,
     previewImportableCount,
     previewSkippedCount,

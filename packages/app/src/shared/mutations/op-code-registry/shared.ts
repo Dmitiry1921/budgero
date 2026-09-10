@@ -8,6 +8,7 @@
 
 import { getRuntime } from '@shared/runtime/global';
 import {
+  type ImportIdentity,
   type MilliUnits,
   type ChartConfiguration,
   type SaveReportInput,
@@ -41,6 +42,7 @@ export interface CategoryRow {
 
 /** Transaction snapshot captured for undo/redo operations (supports multiple naming conventions) */
 export interface TransactionSnapshot {
+  importIdentities?: ImportIdentity[];
   ID?: number;
   Date?: string;
   date?: string;
@@ -117,6 +119,7 @@ export function transactionSnapshotToAddOp(snapshot: TransactionSnapshot): OpCal
   return {
     op: 'transactions.add',
     args: {
+      importIdentities: snapshot.importIdentities,
       inflow:
         snapshot.InflowNative ??
         snapshot.InflowOriginal ??

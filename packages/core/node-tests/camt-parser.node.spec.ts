@@ -31,6 +31,7 @@ describe('parseCamt', () => {
       payee: 'MUELLER',
       memo: undefined,
       reference: 'MUELL/FINP/RA12345',
+      bankEntryReference: 'AAAASESS-FP-CN_98765/01',
     });
 
     // Batched DBIT entry — no payee (no Cdtr/Dbtr block), reference falls
@@ -43,6 +44,7 @@ describe('parseCamt', () => {
       payee: undefined,
       memo: undefined,
       reference: 'AAAASESS-FP-ACCR-01',
+      bankEntryReference: 'AAAASESS-FP-ACCR-01',
     });
 
     // Third entry has nested <CntrValAmt><Amt Ccy="EUR"> inside NtryDtls.

@@ -36,6 +36,8 @@ export interface ParsedCamtTransaction {
   memo?: string;
   /** EndToEndId (preferred) or AcctSvcrRef. */
   reference?: string;
+  /** Only an entry-level bank reference identifies the whole booked entry. */
+  bankEntryReference?: string;
 }
 
 export interface ParsedCamtStatement {
@@ -167,6 +169,7 @@ function parseEntry(entry: string): ParsedCamtTransaction | null {
     payee,
     memo,
     reference,
+    bankEntryReference: firstText(entryHead, 'AcctSvcrRef'),
   };
 }
 
@@ -231,6 +234,7 @@ export const CAMT_HEADERS = [
   'Payee',
   'Memo',
   'Reference',
+  'BankEntryReference',
   'Account',
   'Currency',
 ] as const;
@@ -263,6 +267,7 @@ export function camtToImportRows(parsed: ParsedCamt): CamtImportRows {
         Payee: t.payee ?? '',
         Memo: t.memo ?? '',
         Reference: t.reference ?? '',
+        BankEntryReference: t.bankEntryReference ?? '',
         Account: stmt.accountId ?? '',
         Currency: t.currency || stmt.currency || '',
       });
