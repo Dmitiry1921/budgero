@@ -7,6 +7,14 @@ vi.mock('../migrations.js', () => ({
     runMigrations(): void {
       // Empty mock implementation
     }
+
+    cleanupOrphanedRecords(): number {
+      return 0;
+    }
+
+    optimizeDatabase() {
+      return { pruned: 0, vacuumed: false };
+    }
   },
 }));
 

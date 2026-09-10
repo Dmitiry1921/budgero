@@ -412,29 +412,35 @@ export class WebDatabaseAdapter extends BaseDatabaseAdapter {
   }
 
   async restore(data: Uint8Array): Promise<void> {
-    this.db.close();
-    this.db = new this.SQL.Database(data);
-    // Re-enable foreign key constraints after restore
-    this.ensureForeignKeysOnOperation();
-    // Await so a failed write can't leave the on-disk copy behind the
-    // in-memory one after restore() reports success.
-    await this.persist(data);
+    await this.replaceDatabase(data, false);
   }
 
   async restoreAndMigrate(data: Uint8Array): Promise<void> {
-    this.db.close();
-    this.db = new this.SQL.Database(data);
+    await this.replaceDatabase(data, true);
+  }
 
-    // Bring a possibly-older backup up to the current schema. Throws
-    // DatabaseNewerThanAppError if the file is from a newer app version.
-    const runner = new MigrationRunner(createMigrationDatabase(this.db));
-    runner.runMigrations();
-    this.ensureForeignKeysOnOperation();
+  private async replaceDatabase(data: Uint8Array, migrate: boolean): Promise<void> {
+    const candidate = new this.SQL.Database(data);
+    try {
+      if (migrate) {
+        const runner = new MigrationRunner(createMigrationDatabase(candidate));
+        runner.runMigrations();
+      }
+      // Export can reset sql.js connection pragmas, so enable constraints after
+      // producing the bytes. Validate and persist before replacing the live DB:
+      // rejected restores must not invalidate the caller's sync cursor or UI.
+      const persistedData = migrate ? candidate.export() : data;
+      candidate.exec('PRAGMA foreign_keys = ON');
+      await this.persist(persistedData);
+    } catch (error) {
+      candidate.close();
+      throw error;
+    }
 
-    // Persist the MIGRATED bytes, not the raw restored ones, so the on-disk
-    // copy matches what we're now operating on.
-    const migrated = this.db.export();
-    await this.persist(migrated);
+    const previous = this.db;
+    this.db = candidate;
+    this.fkCheckCounter = 0;
+    previous.close();
   }
 
   close(): void {
@@ -442,15 +448,15 @@ export class WebDatabaseAdapter extends BaseDatabaseAdapter {
   }
 
   private async saveToOPFS(data: Uint8Array, encrypted: boolean): Promise<void> {
+    let writable: FileSystemWritableFileStream | undefined;
     try {
-      if (!navigator.storage || !navigator.storage.getDirectory) {
-        debugLog('OPFS not available for saving');
-        return;
+      if (!globalThis.navigator?.storage?.getDirectory) {
+        throw new Error('Browser storage is unavailable. The budget could not be saved locally.');
       }
 
       const opfsRoot = await navigator.storage.getDirectory();
       const fileHandle = await opfsRoot.getFileHandle(this.dbFilename, { create: true });
-      const writable = await fileHandle.createWritable();
+      writable = await fileHandle.createWritable();
       // Write as Blob to satisfy FileSystemWriteChunkType and avoid ArrayBufferLike typing issues
       await writable.write(new Blob([toArrayBuffer(data)]));
       await writable.close();
@@ -459,7 +465,14 @@ export class WebDatabaseAdapter extends BaseDatabaseAdapter {
         encrypted,
       });
     } catch (error) {
+      // Do not commit a partial write or leave a failed writer holding the file.
+      try {
+        await writable?.abort();
+      } catch {
+        // Preserve the original storage error when the stream already closed.
+      }
       debugLog('Failed to save to OPFS', { error });
+      throw error;
     }
   }
 
