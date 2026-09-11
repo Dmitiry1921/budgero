@@ -36,6 +36,7 @@ export const TransactionTableHeader = React.memo(function TransactionTableHeader
         >
           <div className="flex items-center justify-center">
             <TransactionSelectionCheckbox
+              fillCell
               checked={somePageRowsSelected ? 'indeterminate' : allPageRowsSelected}
               onCheckedChange={(checked) => onToggleSelectPage(checked === true)}
               aria-label="Select all transactions on this page"

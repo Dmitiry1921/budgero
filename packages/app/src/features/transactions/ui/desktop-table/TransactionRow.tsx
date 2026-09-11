@@ -258,9 +258,10 @@ export const TransactionRow = React.memo(function TransactionRow({
     const outflowValue = getPrimaryOutflow(transaction) || 0;
     return (
       <TableRow id={`transaction-${transaction.ID}`} className="h-16 bg-primary/[0.04]">
-        <TableCell className="px-0 text-center select-none">
+        <TableCell className="relative px-0 text-center select-none">
           <div className="flex items-center justify-center">
             <TransactionSelectionCheckbox
+              fillCell
               disabled
               aria-label="Projected transactions cannot be selected"
             />
@@ -331,9 +332,10 @@ export const TransactionRow = React.memo(function TransactionRow({
       )}
     >
       {/* Checkbox */}
-      <TableCell className="px-0 text-center select-none">
+      <TableCell className="relative px-0 text-center select-none">
         <div className="flex items-center justify-center">
           <TransactionSelectionCheckbox
+            fillCell
             checked={isSelected}
             onPointerDown={onCheckboxPointerDown}
             onCheckedChange={(checked) => onCheckboxChange(transaction, rowIndex, checked === true)}
