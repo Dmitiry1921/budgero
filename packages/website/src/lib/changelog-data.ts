@@ -16,10 +16,79 @@ export type ChangelogEntry = {
 
 export const changelogEntries: ChangelogEntry[] = [
   {
+    version: 'v1.12.0',
+    date: 'September 12, 2026',
+    summary:
+      'Adds category funding priorities and duplicate review for file imports, and fixes YNAB imports, transaction lists, and local saving.',
+    isLatest: true,
+    items: [
+      {
+        type: 'new',
+        title: 'Category funding priorities',
+        description:
+          'Set category priorities independently of category order. Fund Goals funds higher priorities first, then shares remaining money proportionally to shortfalls or toward equal completion percentages. Edit priorities in category dialogs, row menus, or the budgeting side panel. Priority choices, sharing, and badge visibility are saved per budget and synced across devices.',
+      },
+      {
+        type: 'new',
+        title: 'Review duplicate file transactions',
+        description:
+          'CSV, PDF, OFX/QFX, QIF, and CAMT imports identify previously imported rows and flag possible duplicates for review. Choose whether to skip or import them, with separate counts for imported, skipped, invalid, and failed rows.',
+      },
+      {
+        type: 'improved',
+        title: 'Resolve ambiguous YNAB imports',
+        description:
+          'Choose a date format when a ZIP export is ambiguous, and match credit cards to payment categories when a direct YNAB import cannot determine the links.',
+      },
+      {
+        type: 'fixed',
+        title: 'YNAB account, category, and split data',
+        description:
+          'Fixed imports merging same-named accounts or categories, mispairing split transfers, and losing split notes or reconciliation status. Explicitly uncategorized API inflows remain uncategorized. Cancelled imports clean up their unfinished budgets.',
+      },
+      {
+        type: 'fixed',
+        title: 'YNAB currency amounts',
+        description:
+          'Fixed decimal and thousands separators being misread or amounts being truncated. Invalid nonempty amounts now stop the import instead of silently changing values.',
+      },
+      {
+        type: 'fixed',
+        title: 'Credit-card payment categories',
+        description:
+          "Fixed cards with matching names sharing a payment category, and account renaming or deletion changing another card's payment category.",
+      },
+      {
+        type: 'fixed',
+        title: 'Remembered transaction defaults',
+        description:
+          'Fixed remembered accounts, payees, categories, and labels carrying over between budgets, including hidden invalid labels that prevented saving a transaction.',
+      },
+      {
+        type: 'improved',
+        title: 'Transaction selection',
+        description:
+          'Transaction checkboxes are larger on desktop and mobile. The full checkbox cell is clickable on desktop, including Select all, with Shift/Cmd/Ctrl selection preserved.',
+      },
+      {
+        type: 'fixed',
+        title: 'Transaction list scrolling',
+        description:
+          'Fixed category pickers closing immediately in scrolled transaction lists. Desktop lists now fit the space below page controls so the bottom is not pushed off-screen by a fixed table height.',
+      },
+      {
+        type: 'fixed',
+        title: 'Local saving and backup restores',
+        description:
+          'Fixed local save failures being silently ignored. A failed backup restore now keeps the current budget open instead of replacing it.',
+      },
+    ],
+  },
+  {
     version: 'v1.11.8',
     date: 'September 10, 2026',
     summary: 'Adds a Month to date report shortcut and self-host registration controls.',
-    isLatest: true,
+    isLatest: false,
     items: [
       {
         type: 'new',

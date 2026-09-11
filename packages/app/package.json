@@ -1,6 +1,6 @@
 {
   "name": "@budgero/app",
-  "version": "1.11.8",
+  "version": "1.12.0",
   "license": "AGPL-3.0-only",
   "description": "Main application for Budgero",
   "private": true,
