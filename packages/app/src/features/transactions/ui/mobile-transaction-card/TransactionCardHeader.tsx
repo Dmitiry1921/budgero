@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Checkbox } from '@shared/ui/checkbox';
+import { TransactionSelectionCheckbox } from '@features/transactions/ui/TransactionSelectionCheckbox';
 import { Calendar as CalendarIcon, Tag } from 'lucide-react';
 import type { GetTransactionsByAccountRow } from '@budgero/core/browser';
 import { formatShortDate } from '@shared/lib/date-utils';
@@ -40,7 +40,7 @@ export const TransactionCardHeader = React.memo(function TransactionCardHeader({
     <div className="flex flex-1 items-center gap-2 min-w-0">
       {!hideSelection && (
         <div className="flex-shrink-0">
-          <Checkbox
+          <TransactionSelectionCheckbox
             checked={isSelected}
             onCheckedChange={onSelectionChange}
             aria-label={`Select transaction: ${transaction.Memo || 'No memo'} - ${formatMilli(accountLocalizer, asMilli(transaction.InflowConverted > 0 ? transaction.InflowConverted : transaction.OutflowConverted))}`}

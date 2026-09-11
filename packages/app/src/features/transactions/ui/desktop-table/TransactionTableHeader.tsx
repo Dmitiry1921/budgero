@@ -1,6 +1,6 @@
 import React from 'react';
 import { TableHead, TableHeader, TableRow } from '@shared/ui/table';
-import { Checkbox } from '@shared/ui/checkbox';
+import { TransactionSelectionCheckbox } from '@features/transactions/ui/TransactionSelectionCheckbox';
 import { ResizeHandle } from './ResizeHandle';
 import type { ColumnWidths } from './useColumnResize';
 
@@ -30,9 +30,12 @@ export const TransactionTableHeader = React.memo(function TransactionTableHeader
   return (
     <TableHeader className="sticky top-0 z-20 bg-background shadow-[0_1px_0_hsl(var(--border))]">
       <TableRow>
-        <TableHead style={{ width: columnWidths.checkbox }} className="relative group">
+        <TableHead
+          style={{ width: columnWidths.checkbox }}
+          className="relative group px-0 select-none"
+        >
           <div className="flex items-center justify-center">
-            <Checkbox
+            <TransactionSelectionCheckbox
               checked={somePageRowsSelected ? 'indeterminate' : allPageRowsSelected}
               onCheckedChange={(checked) => onToggleSelectPage(checked === true)}
               aria-label="Select all transactions on this page"

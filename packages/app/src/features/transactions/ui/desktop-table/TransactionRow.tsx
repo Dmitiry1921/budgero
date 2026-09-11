@@ -2,7 +2,7 @@ import React from 'react';
 import type { GetTransactionsByAccountRow } from '@budgero/core/browser';
 import { isFutureDate } from '@shared/lib/date-utils';
 import { TableCell, TableRow } from '@shared/ui/table';
-import { Checkbox } from '@shared/ui/checkbox';
+import { TransactionSelectionCheckbox } from '@features/transactions/ui/TransactionSelectionCheckbox';
 import { Button } from '@shared/ui/button';
 import { CalculatorCell } from '@shared/ui/calculator-cell';
 import { DatePickerCell } from '@features/transactions/ui/cells/DatePickerCell';
@@ -258,9 +258,12 @@ export const TransactionRow = React.memo(function TransactionRow({
     const outflowValue = getPrimaryOutflow(transaction) || 0;
     return (
       <TableRow id={`transaction-${transaction.ID}`} className="h-16 bg-primary/[0.04]">
-        <TableCell className="text-center">
+        <TableCell className="px-0 text-center select-none">
           <div className="flex items-center justify-center">
-            <Checkbox disabled aria-label="Projected transactions cannot be selected" />
+            <TransactionSelectionCheckbox
+              disabled
+              aria-label="Projected transactions cannot be selected"
+            />
           </div>
         </TableCell>
         <TableCell>
@@ -328,9 +331,9 @@ export const TransactionRow = React.memo(function TransactionRow({
       )}
     >
       {/* Checkbox */}
-      <TableCell className="text-center">
+      <TableCell className="px-0 text-center select-none">
         <div className="flex items-center justify-center">
-          <Checkbox
+          <TransactionSelectionCheckbox
             checked={isSelected}
             onPointerDown={onCheckboxPointerDown}
             onCheckedChange={(checked) => onCheckboxChange(transaction, rowIndex, checked === true)}

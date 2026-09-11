@@ -16,7 +16,7 @@ export interface ColumnWidths {
 }
 
 const DEFAULT_WIDTHS: ColumnWidths = {
-  checkbox: 40,
+  checkbox: 56,
   date: 110,
   memo: 200,
   account: 140,
@@ -31,7 +31,7 @@ const DEFAULT_WIDTHS: ColumnWidths = {
 };
 
 const MIN_WIDTHS: ColumnWidths = {
-  checkbox: 15,
+  checkbox: 56,
   date: 35,
   memo: 100,
   account: 50,
@@ -58,7 +58,16 @@ export function useColumnResize(
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        return { ...DEFAULT_WIDTHS, ...parsed };
+        // Older saved widths can be too narrow for the enlarged selection target.
+        const checkboxWidth = parsed.checkbox;
+        return {
+          ...DEFAULT_WIDTHS,
+          ...parsed,
+          checkbox:
+            typeof checkboxWidth === 'number' && Number.isFinite(checkboxWidth)
+              ? Math.max(MIN_WIDTHS.checkbox, checkboxWidth)
+              : DEFAULT_WIDTHS.checkbox,
+        };
       }
     } catch {
       // Ignore parse errors
