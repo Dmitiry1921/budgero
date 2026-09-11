@@ -16,6 +16,8 @@ export interface YNABImportConfig {
   badgeIcon: string;
   /** Explicit source date order for ZIP exports whose numeric dates are ambiguous. */
   dateOrder?: 'day-first' | 'month-first';
+  /** Explicit source-ID links selected for this exact API snapshot. */
+  creditPaymentMappings?: YNABCreditPaymentMappings;
   /**
    * Called at import stage and batch boundaries. Returning a promise applies
    * backpressure, allowing browser clients to paint before work continues.
@@ -61,11 +63,40 @@ export interface YNABSplitTransactionSummary {
 export interface YNABImportPreview {
   /** True when the ZIP needs a date-order choice to distinguish day and month. */
   dateOrderAmbiguous?: boolean;
+  /** Present only when source credit-card payment links need a user choice. */
+  creditPaymentMatching?: YNABCreditPaymentMatching;
   registerRowCount: number;
   accountCount: number;
   categoryCount: number;
   missingCategories: YNABImportCategorySummary[];
   splitTransactions: YNABSplitTransactionSummary[];
+}
+
+export interface YNABCreditPaymentMappings {
+  planId: string;
+  serverKnowledge: number;
+  byAccountId: Record<string, string>;
+}
+
+export interface YNABCreditPaymentMatching {
+  planId: string;
+  serverKnowledge: number;
+  accounts: {
+    accountId: string;
+    name: string;
+    balance: number;
+    closed: boolean;
+    note?: string;
+    candidateCategoryIds: string[];
+    recentTransactions: { date: string; payee: string; amount: number }[];
+  }[];
+  categories: {
+    categoryId: string;
+    name: string;
+    available: number;
+    assigned: number;
+    note?: string;
+  }[];
 }
 
 export interface YNABImportSummary {

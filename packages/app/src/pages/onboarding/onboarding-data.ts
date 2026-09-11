@@ -431,6 +431,7 @@ export interface OnboardingFormState {
   ynabApiSnapshot: YNABApiPlanSnapshot | null;
   ynabPreview: YNABImportPreview | null;
   ynabDateOrder?: YNABImportConfig['dateOrder'];
+  ynabCreditPaymentMappings?: YNABImportConfig['creditPaymentMappings'];
   ynabSourceNumberFormat?: string;
   /** Selected HEARD_OPTIONS id, or '' if untouched/skipped. */
   heardSource: string;

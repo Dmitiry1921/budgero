@@ -2,7 +2,8 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import type { YNABImportResult } from '@budgero/core/browser';
+import { YNABImportService } from '@budgero/core/browser';
+import type { YNABApiPlanSnapshot, YNABImportResult } from '@budgero/core/browser';
 
 import OnboardingFlow from './OnboardingFlow';
 
@@ -46,9 +47,47 @@ vi.mock('./steps', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./steps')>();
   return {
     ...actual,
-    YnabImportStep: ({ set }: { set: (value: Record<string, unknown>) => void }) => (
+    YnabImportStep: ({
+      set,
+      state,
+      onFileSelected,
+      onApiSnapshotSelected,
+    }: {
+      set: (value: Record<string, unknown>) => void;
+      state: {
+        ynabFile: { name: string } | null;
+        ynabApiSnapshot: YNABApiPlanSnapshot | null;
+        ynabPreview: { creditPaymentMatching?: unknown } | null;
+      };
+      onFileSelected: (file: File) => void;
+      onApiSnapshotSelected: (snapshot: YNABApiPlanSnapshot) => void;
+    }) => (
       <div>
         YNAB source selection
+        <span>Source: {state.ynabFile?.name || state.ynabApiSnapshot?.plan.id || 'none'}</span>
+        <span>
+          Requires card matching: {state.ynabPreview?.creditPaymentMatching ? 'yes' : 'no'}
+        </span>
+        <button
+          onClick={() =>
+            onFileSelected({
+              name: 'late.zip',
+              size: 1,
+              arrayBuffer: async () => new ArrayBuffer(1),
+            } as File)
+          }
+        >
+          Inspect delayed ZIP
+        </button>
+        <button
+          onClick={() =>
+            onApiSnapshotSelected({
+              plan: { id: 'api-source', name: 'Connected source', currency_format: null },
+            } as YNABApiPlanSnapshot)
+          }
+        >
+          Load API snapshot
+        </button>
         <button
           onClick={() =>
             set({
@@ -60,6 +99,37 @@ vi.mock('./steps', async (importOriginal) => {
           }
         >
           Load ambiguous ZIP
+        </button>
+        <button
+          onClick={() =>
+            set({
+              ynabFile: null,
+              ynabPreview: {
+                creditPaymentMatching: {
+                  planId: 'plan',
+                  serverKnowledge: 1,
+                  accounts: [{ accountId: 'card', candidateCategoryIds: ['category'] }],
+                  categories: [{ categoryId: 'category' }],
+                },
+              },
+              ynabCreditPaymentMappings: undefined,
+            })
+          }
+        >
+          Load unmatched cards
+        </button>
+        <button
+          onClick={() =>
+            set({
+              ynabCreditPaymentMappings: {
+                planId: 'plan',
+                serverKnowledge: 1,
+                byAccountId: { card: 'category' },
+              },
+            })
+          }
+        >
+          Match cards
         </button>
         <button onClick={() => set({ ynabDateOrder: 'month-first' })}>Use month-first dates</button>
       </div>
@@ -248,4 +318,68 @@ it('requires a date-order choice before advancing an ambiguous ZIP through onboa
   expect(screen.getByRole('button', { name: /Let’s begin/ })).toBeEnabled();
   fireEvent.click(screen.getByRole('button', { name: /Let’s begin/ }));
   expect(screen.getByText('Master password')).toBeInTheDocument();
+});
+
+it('requires card payment mappings before advancing through onboarding', () => {
+  render(
+    <MemoryRouter>
+      <QueryClientProvider client={new QueryClient()}>
+        <OnboardingFlow onComplete={vi.fn()} />
+      </QueryClientProvider>
+    </MemoryRouter>
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Load unmatched cards' }));
+  expect(screen.getByRole('button', { name: /Let’s begin/ })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Match cards' }));
+  expect(screen.getByRole('button', { name: /Let’s begin/ })).toBeEnabled();
+});
+
+it('ignores late ZIP inspection after the source changes to an API plan with unmatched cards', async () => {
+  let resolve!: (preview: Awaited<ReturnType<typeof YNABImportService.inspectYNABZip>>) => void;
+  const inspectZip = vi.spyOn(YNABImportService, 'inspectYNABZip').mockReturnValue(
+    new Promise((done) => {
+      resolve = done;
+    })
+  );
+  const inspectApi = vi.spyOn(YNABImportService, 'inspectYNABApiSnapshot').mockReturnValue({
+    accountCount: 2,
+    categoryCount: 2,
+    registerRowCount: 0,
+    missingCategories: [],
+    splitTransactions: [],
+    creditPaymentMatching: {
+      planId: 'api-source',
+      serverKnowledge: 1,
+      accounts: [],
+      categories: [],
+    },
+  });
+  try {
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={new QueryClient()}>
+          <OnboardingFlow onComplete={vi.fn()} />
+        </QueryClientProvider>
+      </MemoryRouter>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect delayed ZIP' }));
+    await waitFor(() => expect(inspectZip).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Load API snapshot' }));
+    expect(screen.getByText('Source: api-source')).toBeInTheDocument();
+    await act(async () =>
+      resolve({
+        accountCount: 1,
+        categoryCount: 1,
+        registerRowCount: 0,
+        missingCategories: [],
+        splitTransactions: [],
+      })
+    );
+    expect(screen.getByText('Source: api-source')).toBeInTheDocument();
+    expect(screen.getByText('Requires card matching: yes')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Let’s begin/ })).toBeDisabled();
+  } finally {
+    inspectZip.mockRestore();
+    inspectApi.mockRestore();
+  }
 });

@@ -272,6 +272,11 @@ export async function runOnboardingApply(
         ...(!state.ynabApiSnapshot && state.ynabDateOrder
           ? { dateOrder: state.ynabDateOrder }
           : {}),
+        ...(state.ynabApiSnapshot &&
+        state.ynabPreview?.creditPaymentMatching &&
+        state.ynabCreditPaymentMappings
+          ? { creditPaymentMappings: state.ynabCreditPaymentMappings }
+          : {}),
         onProgress: onYnabProgress,
       };
       let importResult: YNABImportResult;

@@ -95,6 +95,19 @@ const ynabState: OnboardingFormState = {
   budgetName: "Aleksa's Plan",
   password: 'test-password',
   passwordConfirm: 'test-password',
+  ynabCreditPaymentMappings: {
+    planId: 'plan',
+    serverKnowledge: 42,
+    byAccountId: { 'card-a': 'cat-b', 'card-b': 'cat-a' },
+  },
+  ynabPreview: {
+    registerRowCount: 0,
+    accountCount: 2,
+    categoryCount: 2,
+    missingCategories: [],
+    splitTransactions: [],
+    creditPaymentMatching: { planId: 'plan', serverKnowledge: 42, accounts: [], categories: [] },
+  },
   ynabApiSnapshot: {
     plan: {
       name: "Aleksa's Plan",
@@ -157,6 +170,10 @@ describe('runOnboardingApply YNAB completion gate', () => {
     });
 
     await reportReady.promise;
+    expect(mocks.importFromApi).toHaveBeenCalledWith(
+      ynabState.ynabApiSnapshot,
+      expect.objectContaining({ creditPaymentMappings: ynabState.ynabCreditPaymentMappings })
+    );
 
     expect(onYnabProgress).toHaveBeenLastCalledWith(
       expect.objectContaining({ stage: 'complete', status: 'passed', progress: 100 })
@@ -224,6 +241,7 @@ it.each(['', '1.234,567'])(
         waitForYnabContinue: async () => true,
       }
     );
+    expect(mocks.importFromZip.mock.calls[0][1]).not.toHaveProperty('creditPaymentMappings');
     expect(mocks.importFromZip).toHaveBeenCalledWith(
       bytes,
       expect.objectContaining({

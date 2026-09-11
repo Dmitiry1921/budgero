@@ -20,6 +20,11 @@ import { FormatSelector } from '@features/budget-management/ui/FormatSelector';
 import { YnabExportGuide } from './YnabExportGuide';
 import { YnabPatHelpPopover } from './YnabPatHelpPopover';
 import { YnabDateOrderChoice } from './YnabDateOrderChoice';
+import { YnabCreditPaymentMatching } from './YnabCreditPaymentMatching';
+import {
+  hasCompleteCreditPaymentMappings,
+  type CreditPaymentMappings,
+} from './ynab-credit-payment-matching';
 
 interface YnabImportTabProps {
   sourceMode: 'api' | 'zip';
@@ -45,6 +50,8 @@ interface YnabImportTabProps {
   preview: YNABImportPreview | null;
   dateOrder?: YNABImportConfig['dateOrder'];
   onDateOrderChange: (value: NonNullable<YNABImportConfig['dateOrder']>) => void;
+  creditPaymentMappings?: CreditPaymentMappings;
+  onCreditPaymentMappingsChange: (value: CreditPaymentMappings) => void;
   isInspecting: boolean;
   isImporting: boolean;
   onReset: () => void;
@@ -75,6 +82,8 @@ export function YnabImportTab({
   preview,
   dateOrder,
   onDateOrderChange,
+  creditPaymentMappings,
+  onCreditPaymentMappingsChange,
   isInspecting,
   isImporting,
   onReset,
@@ -83,6 +92,8 @@ export function YnabImportTab({
   const canImport =
     Boolean(budgetName.trim()) &&
     Boolean(preview) &&
+    (sourceMode !== 'api' ||
+      hasCompleteCreditPaymentMappings(preview?.creditPaymentMatching, creditPaymentMappings)) &&
     (sourceMode !== 'zip' || !preview?.dateOrderAmbiguous || Boolean(dateOrder)) &&
     (sourceMode === 'api' ? Boolean(selectedPlanId) : Boolean(file));
 
@@ -341,6 +352,15 @@ export function YnabImportTab({
                 {preview.registerRowCount.toLocaleString()} register{' '}
                 {preview.registerRowCount === 1 ? 'row' : 'rows'}
               </p>
+              {preview.creditPaymentMatching && (
+                <YnabCreditPaymentMatching
+                  matching={preview.creditPaymentMatching}
+                  value={creditPaymentMappings}
+                  onChange={onCreditPaymentMappingsChange}
+                  currency={currency}
+                  disabled={isImporting || isConnecting}
+                />
+              )}
               <p className="text-[11px] text-muted-foreground">
                 Account types and on-budget status will be preserved from YNAB.
               </p>

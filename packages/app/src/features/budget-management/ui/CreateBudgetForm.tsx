@@ -27,6 +27,10 @@ import { notifyUpdateRequired } from '@shared/lib/update-required';
 import { ManualBudgetTab } from '@features/budget-management/ui/create-budget-form/ManualBudgetTab';
 import { RestoreBackupTab } from '@features/budget-management/ui/create-budget-form/RestoreBackupTab';
 import { YnabImportTab } from '@features/budget-management/ui/create-budget-form/YnabImportTab';
+import {
+  hasCompleteCreditPaymentMappings,
+  type CreditPaymentMappings,
+} from '@features/budget-management/ui/create-budget-form/ynab-credit-payment-matching';
 import { YnabImportStatus } from '@features/budget-management/ui/create-budget-form/YnabImportStatus';
 
 interface CreateBudgetFormProps {
@@ -80,6 +84,9 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
   const [isImporting, setIsImporting] = useState<boolean>(false);
   const [isInspectingYnab, setIsInspectingYnab] = useState(false);
   const [ynabPreview, setYnabPreview] = useState<YNABImportPreview | null>(null);
+  const [ynabCreditPaymentMappings, setYnabCreditPaymentMappings] =
+    useState<CreditPaymentMappings>();
+  const ynabSourceRequestRef = useRef(0);
   const [ynabDateOrder, setYnabDateOrder] = useState<YNABImportConfig['dateOrder']>();
   const [ynabSourceMode, setYnabSourceMode] = useState<'api' | 'zip'>('api');
   const [ynabPersonalAccessToken, setYnabPersonalAccessToken] = useState('');
@@ -112,6 +119,7 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
 
   useEffect(
     () => () => {
+      ynabSourceRequestRef.current += 1;
       const run = ynabImportRunRef.current;
       if (run) run.cancelled = true;
       // Once saving starts, finalization owns the accepted budget. Publishing
@@ -130,10 +138,14 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
   );
 
   const resetForm = () => {
+    ynabSourceRequestRef.current += 1;
+    setIsConnectingYnab(false);
+    setIsInspectingYnab(false);
     setName('');
     setBudgetName('');
     setFile(null);
     setYnabPreview(null);
+    setYnabCreditPaymentMappings(undefined);
     setYnabDateOrder(undefined);
     setYnabPersonalAccessToken('');
     setYnabPlans([]);
@@ -183,31 +195,38 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
 
+    const request = ++ynabSourceRequestRef.current;
     setFile(selectedFile);
     setYnabPreview(null);
+    setYnabCreditPaymentMappings(undefined);
     setYnabDateOrder(undefined);
     setIsInspectingYnab(true);
 
     try {
       const preview = await YNABImportService.inspectYNABZip(await selectedFile.arrayBuffer());
+      if (request !== ynabSourceRequestRef.current) return;
       setYnabPreview(preview);
     } catch (error) {
+      if (request !== ynabSourceRequestRef.current) return;
       setFile(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
       toast.error(getErrorMessage(error, 'Could not inspect this YNAB export.'));
     } finally {
-      setIsInspectingYnab(false);
+      if (request === ynabSourceRequestRef.current) setIsInspectingYnab(false);
     }
   };
 
   const loadYnabApiPlan = async (planId: string, token = ynabPersonalAccessToken) => {
     if (!planId || !token.trim()) return;
+    const request = ++ynabSourceRequestRef.current;
     setIsConnectingYnab(true);
     setYnabPreview(null);
+    setYnabCreditPaymentMappings(undefined);
     setYnabApiSnapshot(null);
     try {
       const client = new YNABApiClient(token);
       const snapshot = await client.getPlan(planId);
+      if (request !== ynabSourceRequestRef.current) return;
       setSelectedYnabPlanId(planId);
       setYnabApiSnapshot(snapshot);
       setYnabPreview(YNABImportService.inspectYNABApiSnapshot(snapshot));
@@ -217,24 +236,29 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
         setNumberFormat(snapshot.plan.currency_format.example_format);
       }
     } catch (error) {
+      if (request !== ynabSourceRequestRef.current) return;
       toast.error(getErrorMessage(error, 'Could not read that YNAB plan.'));
     } finally {
-      setIsConnectingYnab(false);
+      if (request === ynabSourceRequestRef.current) setIsConnectingYnab(false);
     }
   };
 
   const handleConnectYnab = async () => {
     if (!ynabPersonalAccessToken.trim()) return;
+    const request = ++ynabSourceRequestRef.current;
     setIsConnectingYnab(true);
     setYnabPreview(null);
+    setYnabCreditPaymentMappings(undefined);
     setYnabApiSnapshot(null);
     try {
       const client = new YNABApiClient(ynabPersonalAccessToken);
       const plans = await client.listPlans();
+      if (request !== ynabSourceRequestRef.current) return;
       if (plans.length === 0) throw new Error('No YNAB plans are available for this token');
       setYnabPlans(plans);
       const planId = plans[0].id;
       const snapshot = await client.getPlan(planId);
+      if (request !== ynabSourceRequestRef.current) return;
       setSelectedYnabPlanId(planId);
       setYnabApiSnapshot(snapshot);
       setYnabPreview(YNABImportService.inspectYNABApiSnapshot(snapshot));
@@ -244,11 +268,12 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
         setNumberFormat(snapshot.plan.currency_format.example_format);
       }
     } catch (error) {
+      if (request !== ynabSourceRequestRef.current) return;
       setYnabPlans([]);
       setSelectedYnabPlanId('');
       toast.error(getErrorMessage(error, 'Could not connect to YNAB.'));
     } finally {
-      setIsConnectingYnab(false);
+      if (request === ynabSourceRequestRef.current) setIsConnectingYnab(false);
     }
   };
 
@@ -406,6 +431,16 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
       toast.error('Select the date format used in your YNAB export.');
       return;
     }
+    if (
+      ynabSourceMode === 'api' &&
+      !hasCompleteCreditPaymentMappings(
+        ynabPreview?.creditPaymentMatching,
+        ynabCreditPaymentMappings
+      )
+    ) {
+      toast.error('Match each credit card to its payment category before importing.');
+      return;
+    }
     if (ynabImportRunRef.current?.saving || isImporting) return;
     const budgetService = runtime.services().budgets;
     const run = {
@@ -441,6 +476,11 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
         numberFormat,
         badgeIcon: importBadgeIcon,
         ...(ynabSourceMode === 'zip' && ynabDateOrder ? { dateOrder: ynabDateOrder } : {}),
+        ...(ynabSourceMode === 'api' &&
+        ynabPreview?.creditPaymentMatching &&
+        ynabCreditPaymentMappings
+          ? { creditPaymentMappings: ynabCreditPaymentMappings }
+          : {}),
         onProgress: async (update) => {
           if (run.cancelled) throw new Error('YNAB import cancelled');
           setYnabImportUpdates((current) => [...current, update]);
@@ -755,13 +795,26 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
             <YnabImportTab
               sourceMode={ynabSourceMode}
               onSourceModeChange={(mode) => {
+                ynabSourceRequestRef.current += 1;
+                setIsConnectingYnab(false);
+                setIsInspectingYnab(false);
                 setYnabSourceMode(mode);
                 setYnabPreview(null);
+                setYnabCreditPaymentMappings(undefined);
                 setYnabApiSnapshot(null);
                 setYnabDateOrder(undefined);
               }}
               personalAccessToken={ynabPersonalAccessToken}
-              onPersonalAccessTokenChange={setYnabPersonalAccessToken}
+              onPersonalAccessTokenChange={(token) => {
+                ynabSourceRequestRef.current += 1;
+                setYnabPersonalAccessToken(token);
+                setYnabPreview(null);
+                setYnabApiSnapshot(null);
+                setYnabCreditPaymentMappings(undefined);
+                setYnabPlans([]);
+                setSelectedYnabPlanId('');
+                setIsConnectingYnab(false);
+              }}
               plans={ynabPlans}
               selectedPlanId={selectedYnabPlanId}
               onSelectedPlanChange={(planId) => void loadYnabApiPlan(planId)}
@@ -781,6 +834,8 @@ const CreateBudgetForm: React.FC<CreateBudgetFormProps> = ({
               preview={ynabPreview}
               dateOrder={ynabDateOrder}
               onDateOrderChange={setYnabDateOrder}
+              creditPaymentMappings={ynabCreditPaymentMappings}
+              onCreditPaymentMappingsChange={setYnabCreditPaymentMappings}
               isInspecting={isInspectingYnab}
               isImporting={isImporting}
               onReset={resetForm}

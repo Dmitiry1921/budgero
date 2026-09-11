@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => {
     finalize,
     importSnapshot: vi.fn(),
     inspectZip: vi.fn(),
+    inspectSnapshot: vi.fn(),
     importZip: vi.fn(),
     getPlan: vi.fn(),
     syncBudgetState: vi.fn(),
@@ -37,13 +38,7 @@ vi.mock('@budgero/core/browser', () => ({
     getPlan = mocks.getPlan;
   },
   YNABImportService: class {
-    static inspectYNABApiSnapshot = () => ({
-      accountCount: 1,
-      categoryCount: 1,
-      registerRowCount: 1,
-      missingCategories: [],
-      splitTransactions: [],
-    });
+    static inspectYNABApiSnapshot = mocks.inspectSnapshot;
 
     static inspectYNABZip = mocks.inspectZip;
 
@@ -84,7 +79,13 @@ vi.mock('@features/budget-management/ui/create-budget-form/YnabImportTab', () =>
     onPersonalAccessTokenChange: (value: string) => void;
     onConnect: () => void;
     onImport: () => void;
-    preview: unknown;
+    preview: import('@budgero/core/browser').YNABImportPreview | null;
+    creditPaymentMappings?: YNABImportConfig['creditPaymentMappings'];
+    onCreditPaymentMappingsChange: (
+      value: NonNullable<YNABImportConfig['creditPaymentMappings']>
+    ) => void;
+    onSelectedPlanChange: (value: string) => void;
+    onReset: () => void;
     currency: string;
     onSourceModeChange: (value: 'api' | 'zip') => void;
     onBudgetNameChange: (value: string) => void;
@@ -101,6 +102,22 @@ vi.mock('@features/budget-management/ui/create-budget-form/YnabImportTab', () =>
         Import source
       </button>
       <span>Currency: {props.currency}</span>
+      <span>Mappings: {JSON.stringify(props.creditPaymentMappings)}</span>
+      <button
+        onClick={() => {
+          const matching = props.preview?.creditPaymentMatching;
+          if (matching)
+            props.onCreditPaymentMappingsChange({
+              planId: matching.planId,
+              serverKnowledge: matching.serverKnowledge,
+              byAccountId: { 'card-a': 'cat-b', 'card-b': 'cat-a' },
+            });
+        }}
+      >
+        Match cards
+      </button>
+      <button onClick={() => props.onSelectedPlanChange('other-plan')}>Select another plan</button>
+      <button onClick={props.onReset}>Reset source</button>
       <button onClick={() => props.onSourceModeChange('zip')}>Use ZIP</button>
       <input
         aria-label="Budget name"
@@ -171,6 +188,13 @@ beforeEach(() => {
       name: 'Synthetic plan',
       currency_format: { iso_code: 'EUR', example_format: '1.234,56' },
     },
+  });
+  mocks.inspectSnapshot.mockReturnValue({
+    accountCount: 1,
+    categoryCount: 1,
+    registerRowCount: 1,
+    missingCategories: [],
+    splitTransactions: [],
   });
   mocks.importSnapshot.mockResolvedValue(imported);
   mocks.importZip.mockResolvedValue(imported);
@@ -382,4 +406,93 @@ describe('YNAB import lifecycle', () => {
     expect(screen.getByText('Currency: USD')).toBeInTheDocument();
     view.unmount();
   });
+});
+
+const creditMatching = {
+  planId: 'plan-test',
+  serverKnowledge: 42,
+  accounts: ['a', 'b'].map((id) => ({
+    accountId: `card-${id}`,
+    name: 'Visa',
+    balance: 0,
+    closed: false,
+    recentTransactions: [],
+    candidateCategoryIds: ['cat-a', 'cat-b'],
+  })),
+  categories: ['a', 'b'].map((id) => ({
+    categoryId: `cat-${id}`,
+    name: 'Visa',
+    available: 0,
+    assigned: 0,
+  })),
+};
+
+async function connectAmbiguousCards() {
+  mocks.inspectSnapshot.mockReturnValue({
+    accountCount: 2,
+    categoryCount: 2,
+    registerRowCount: 0,
+    missingCategories: [],
+    splitTransactions: [],
+    creditPaymentMatching: creditMatching,
+  });
+  render(<CreateBudgetForm defaultTab="import" />);
+  fireEvent.change(screen.getByLabelText('Token'), { target: { value: 'test-token' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Import source' })).toBeEnabled());
+}
+
+it('blocks unmapped cards in the handler and forwards explicit mappings with their snapshot identity', async () => {
+  await connectAmbiguousCards();
+  fireEvent.click(screen.getByRole('button', { name: 'Import source' }));
+  expect(mocks.importSnapshot).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Match cards' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Import source' }));
+  await waitFor(() =>
+    expect(mocks.importSnapshot).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        creditPaymentMappings: {
+          planId: 'plan-test',
+          serverKnowledge: 42,
+          byAccountId: { 'card-a': 'cat-b', 'card-b': 'cat-a' },
+        },
+      })
+    )
+  );
+  await waitFor(() => expect(mocks.save).toHaveBeenCalled());
+});
+
+it.each(['Connect', 'Select another plan', 'Reset source', 'Use ZIP'])(
+  'clears mappings when the source changes through %s, including a failed reload',
+  async (button) => {
+    await connectAmbiguousCards();
+    fireEvent.click(screen.getByRole('button', { name: 'Match cards' }));
+    expect(screen.getByText(/^Mappings:/)).toHaveTextContent('card-a');
+    mocks.getPlan.mockRejectedValue(new Error('Could not reload'));
+    fireEvent.click(screen.getByRole('button', { name: button }));
+    await waitFor(() => expect(screen.getByText(/^Mappings:/)).not.toHaveTextContent('card-a'));
+    expect(screen.getByRole('button', { name: 'Import source' })).toBeDisabled();
+  }
+);
+
+it('invalidates prior mappings when the token changes', async () => {
+  await connectAmbiguousCards();
+  fireEvent.click(screen.getByRole('button', { name: 'Match cards' }));
+  fireEvent.change(screen.getByLabelText('Token'), { target: { value: 'different-token' } });
+  expect(screen.getByText(/^Mappings:/)).not.toHaveTextContent('card-a');
+  expect(screen.getByRole('button', { name: 'Import source' })).toBeDisabled();
+});
+
+it('ignores an API snapshot that returns after switching to ZIP', async () => {
+  const response = deferred<unknown>();
+  mocks.getPlan.mockReturnValue(response.promise);
+  render(<CreateBudgetForm defaultTab="import" />);
+  fireEvent.change(screen.getByLabelText('Token'), { target: { value: 'test-token' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+  await waitFor(() => expect(mocks.getPlan).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole('button', { name: 'Use ZIP' }));
+  await act(async () => response.resolve({ plan: { name: 'Late plan', currency_format: null } }));
+  expect(screen.getByRole('button', { name: 'Import source' })).toBeDisabled();
+  expect(mocks.inspectSnapshot).not.toHaveBeenCalled();
 });

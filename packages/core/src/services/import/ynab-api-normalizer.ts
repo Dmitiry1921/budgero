@@ -8,6 +8,7 @@ import type {
   YNABImportReadyToAssignSpec,
   YNABRegisterRow,
 } from './types.js';
+import { inspectYNABCreditPaymentMappings } from './ynab-credit-payment-mapping.js';
 
 export interface NormalizedYNABApiImport {
   registerRows: YNABRegisterRow[];
@@ -89,6 +90,7 @@ function transferIdFor(
 
 export function normalizeYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): NormalizedYNABApiImport {
   const { plan } = snapshot;
+  const creditPaymentMappings = inspectYNABCreditPaymentMappings(snapshot).automatic;
   const normalizeAmount = (value: number) =>
     normalizeYNABMilliunitPrecision(value, plan.currency_format?.decimal_digits ?? 3);
   const accountsById = new Map(plan.accounts.map((account) => [account.id, account]));
@@ -392,21 +394,7 @@ export function normalizeYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): Normali
         const linkedGroup = linkedCategory
           ? groupsById.get(linkedCategory.category_group_id)
           : undefined;
-        // The public API does not expose the account/payment-category link.
-        // A unique name match is usable; never collapse ambiguous source IDs.
-        const creditPaymentCandidates = plan.categories.filter(
-          (category) =>
-            !category.deleted &&
-            category.name === account.name &&
-            groupsById.get(category.category_group_id)?.internal === true &&
-            groupsById.get(category.category_group_id)?.name === 'Credit Card Payments'
-        );
-        const sameNamedCreditAccounts = plan.accounts.filter(
-          (candidate) =>
-            !candidate.deleted &&
-            candidate.name === account.name &&
-            (candidate.type === 'creditCard' || candidate.type === 'lineOfCredit')
-        );
+        const creditPaymentCategoryId = creditPaymentMappings.get(account.id);
         return {
           name: account.name,
           type: mapYNABAccountType(account.type),
@@ -425,8 +413,8 @@ export function normalizeYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): Normali
                 linkedYNABCategoryId: linkedCategory.id,
               }
             : {}),
-          ...(creditPaymentCandidates.length === 1 && sameNamedCreditAccounts.length === 1
-            ? { creditPaymentYNABCategoryId: creditPaymentCandidates[0].id }
+          ...(creditPaymentCategoryId
+            ? { creditPaymentYNABCategoryId: creditPaymentCategoryId }
             : {}),
         };
       }),

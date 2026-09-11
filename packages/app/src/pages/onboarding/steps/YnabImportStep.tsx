@@ -3,6 +3,8 @@ import type { YNABApiPlanSnapshot, YNABApiPlanSummary } from '@budgero/core/brow
 import { YNABApiClient } from '@budgero/core/browser';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shared/ui/select';
 import { YnabPatHelpPopover } from '@features/budget-management/ui/create-budget-form/YnabPatHelpPopover';
+import { YnabCreditPaymentMatching } from '@features/budget-management/ui/create-budget-form/YnabCreditPaymentMatching';
+import { hasCompleteCreditPaymentMappings } from '@features/budget-management/ui/create-budget-form/ynab-credit-payment-matching';
 import { YnabDateOrderChoice } from '@features/budget-management/ui/create-budget-form/YnabDateOrderChoice';
 import { Title, type StepProps } from './shared';
 
@@ -24,59 +26,91 @@ export const YnabImportStep: React.FC<YnabStepProps> = ({
   const apiSnapshot = state.ynabApiSnapshot;
   const preview = state.ynabPreview;
   const inputRef = React.useRef<HTMLInputElement | null>(null);
-  const [sourceMode, setSourceMode] = React.useState<'api' | 'zip'>('api');
+  const [sourceMode, setSourceMode] = React.useState<'api' | 'zip'>(state.ynabFile ? 'zip' : 'api');
   const [token, setToken] = React.useState('');
   const [plans, setPlans] = React.useState<YNABApiPlanSummary[]>([]);
   const [selectedPlanId, setSelectedPlanId] = React.useState('');
   const [isConnecting, setIsConnecting] = React.useState(false);
   const [connectionError, setConnectionError] = React.useState('');
+  const requestRef = React.useRef(0);
+  React.useEffect(
+    () => () => {
+      requestRef.current += 1;
+    },
+    []
+  );
   const hasSource = Boolean(file || apiSnapshot);
   const needsDateOrder = Boolean(file && preview?.dateOrderAmbiguous && !state.ynabDateOrder);
 
-  const loadPlan = async (planId: string, accessToken = token) => {
-    if (!planId || !accessToken.trim()) return;
-    setIsConnecting(true);
-    setConnectionError('');
-    try {
-      const snapshot = await new YNABApiClient(accessToken).getPlan(planId);
-      setSelectedPlanId(planId);
-      await onApiSnapshotSelected(snapshot);
-    } catch (error) {
-      setConnectionError(error instanceof Error ? error.message : 'Could not read that plan');
-    } finally {
-      setIsConnecting(false);
-    }
-  };
+  const needsCreditMatching = Boolean(
+    apiSnapshot &&
+      !hasCompleteCreditPaymentMappings(
+        preview?.creditPaymentMatching,
+        state.ynabCreditPaymentMappings
+      )
+  );
 
-  const connect = async () => {
-    if (!token.trim()) return;
-    setIsConnecting(true);
-    setConnectionError('');
-    try {
-      const availablePlans = await new YNABApiClient(token).listPlans();
-      if (availablePlans.length === 0) throw new Error('No plans are available for this token');
-      setPlans(availablePlans);
-      const firstPlanId = availablePlans[0].id;
-      const snapshot = await new YNABApiClient(token).getPlan(firstPlanId);
-      setSelectedPlanId(firstPlanId);
-      await onApiSnapshotSelected(snapshot);
-    } catch (error) {
-      setPlans([]);
-      setConnectionError(error instanceof Error ? error.message : 'Could not connect to YNAB');
-    } finally {
-      setIsConnecting(false);
-    }
-  };
-
-  const switchSource = (mode: 'api' | 'zip') => {
-    setSourceMode(mode);
+  const clearSource = () => {
     set({
       ynabFile: null,
       ynabApiSnapshot: null,
       ynabPreview: null,
       ynabDateOrder: undefined,
+      ynabCreditPaymentMappings: undefined,
       ynabSourceNumberFormat: undefined,
     });
+  };
+
+  const loadPlan = async (planId: string, accessToken = token) => {
+    if (!planId || !accessToken.trim()) return;
+    const request = ++requestRef.current;
+    clearSource();
+    setIsConnecting(true);
+    setConnectionError('');
+    try {
+      const snapshot = await new YNABApiClient(accessToken).getPlan(planId);
+      if (request !== requestRef.current) return;
+      setSelectedPlanId(planId);
+      await onApiSnapshotSelected(snapshot);
+    } catch (error) {
+      if (request !== requestRef.current) return;
+      setConnectionError(error instanceof Error ? error.message : 'Could not read that plan');
+    } finally {
+      if (request === requestRef.current) setIsConnecting(false);
+    }
+  };
+
+  const connect = async () => {
+    if (!token.trim()) return;
+    const request = ++requestRef.current;
+    clearSource();
+    setIsConnecting(true);
+    setConnectionError('');
+    try {
+      const availablePlans = await new YNABApiClient(token).listPlans();
+      if (request !== requestRef.current) return;
+      if (availablePlans.length === 0) throw new Error('No plans are available for this token');
+      setPlans(availablePlans);
+      const firstPlanId = availablePlans[0].id;
+      const snapshot = await new YNABApiClient(token).getPlan(firstPlanId);
+      if (request !== requestRef.current) return;
+      setSelectedPlanId(firstPlanId);
+      await onApiSnapshotSelected(snapshot);
+    } catch (error) {
+      if (request !== requestRef.current) return;
+      setPlans([]);
+      setSelectedPlanId('');
+      setConnectionError(error instanceof Error ? error.message : 'Could not connect to YNAB');
+    } finally {
+      if (request === requestRef.current) setIsConnecting(false);
+    }
+  };
+
+  const switchSource = (mode: 'api' | 'zip') => {
+    requestRef.current += 1;
+    setIsConnecting(false);
+    setSourceMode(mode);
+    clearSource();
   };
 
   return (
@@ -113,7 +147,7 @@ export const YnabImportStep: React.FC<YnabStepProps> = ({
         </button>
       </div>
 
-      {sourceMode === 'api' && !apiSnapshot && (
+      {sourceMode === 'api' && (
         <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700 }}>YNAB PERSONAL ACCESS TOKEN</div>
@@ -126,7 +160,13 @@ export const YnabImportStep: React.FC<YnabStepProps> = ({
               type="password"
               autoComplete="off"
               value={token}
-              onChange={(event) => setToken(event.target.value)}
+              onChange={(event) => {
+                requestRef.current += 1;
+                setToken(event.target.value);
+                setPlans([]);
+                setSelectedPlanId('');
+                clearSource();
+              }}
               placeholder="Used for this import only"
               disabled={isConnecting}
               style={{ flex: 1, minWidth: 0, padding: 9, border: '1px solid #141414' }}
@@ -303,11 +343,15 @@ export const YnabImportStep: React.FC<YnabStepProps> = ({
               </div>
               <div style={{ fontSize: 10, color: '#393939' }}>
                 {file ? `${file.size} · ` : 'Connected through YNAB API · '}
-                {needsDateOrder ? 'select the date format below' : 'ready to import on finish'}
+                {needsDateOrder
+                  ? 'select the date format below'
+                  : needsCreditMatching
+                    ? 'match payment categories below'
+                    : 'ready to import on finish'}
               </div>
             </div>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#2f7d31', letterSpacing: 1 }}>
-              {needsDateOrder ? 'DATE FORMAT' : '✓ READY'}
+              {needsDateOrder ? 'DATE FORMAT' : needsCreditMatching ? 'MATCH CARDS' : '✓ READY'}
             </div>
           </div>
           {preview && (
@@ -355,6 +399,16 @@ export const YnabImportStep: React.FC<YnabStepProps> = ({
                     Choose the separator explicitly if your amounts use three decimal places.
                   </span>
                 </label>
+              )}
+
+              {apiSnapshot && preview.creditPaymentMatching && (
+                <YnabCreditPaymentMatching
+                  matching={preview.creditPaymentMatching}
+                  value={state.ynabCreditPaymentMappings}
+                  onChange={(ynabCreditPaymentMappings) => set({ ynabCreditPaymentMappings })}
+                  currency={state.currency}
+                  disabled={isInspecting || isConnecting}
+                />
               )}
 
               {file && preview.dateOrderAmbiguous && (

@@ -29,6 +29,7 @@ import { useLogout, useProfile, useUpdateOnboarding } from '@entities/user/api/u
 import { useThemePreset } from '@shared/contexts/ThemePresetContext';
 import { getTodayISO } from '@shared/lib/date-utils';
 import { readPendingSpaceInvite } from '@features/budget-sharing/lib/pending-space-invite';
+import { hasCompleteCreditPaymentMappings } from '@features/budget-management/ui/create-budget-form/ynab-credit-payment-matching';
 import { YnabImportStatus } from '@features/budget-management/ui/create-budget-form/YnabImportStatus';
 import {
   INITIAL_STATE,
@@ -111,11 +112,13 @@ const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) => {
   const [ynabImportUpdates, setYnabImportUpdates] = useState<YNABImportProgressUpdate[]>([]);
   const [ynabImportResult, setYnabImportResult] = useState<YNABImportResult | null>(null);
   const [isFinalizingYnab, setIsFinalizingYnab] = useState(false);
+  const ynabSourceRequestRef = useRef(0);
   const ynabReviewResolverRef = useRef<((decision: 'accept' | 'cancel') => void) | null>(null);
   const ynabContinueResolverRef = useRef<((shouldContinue: boolean) => void) | null>(null);
 
   useEffect(
     () => () => {
+      ynabSourceRequestRef.current += 1;
       // If onboarding is torn down while a warned import is awaiting a
       // decision, release the pipeline so it can remove the pending data.
       ynabReviewResolverRef.current?.('cancel');
@@ -127,6 +130,10 @@ const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) => {
   );
 
   const set = useCallback((patch: Partial<OnboardingFormState>) => {
+    if ('ynabFile' in patch || 'ynabApiSnapshot' in patch) {
+      ynabSourceRequestRef.current += 1;
+      setIsInspectingYnab(false);
+    }
     setState((s) => ({ ...s, ...patch }));
   }, []);
 
@@ -187,6 +194,11 @@ const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) => {
       case 'ynab_import':
         return (
           Boolean(state.ynabFile || state.ynabApiSnapshot) &&
+          (!state.ynabApiSnapshot ||
+            hasCompleteCreditPaymentMappings(
+              state.ynabPreview?.creditPaymentMatching,
+              state.ynabCreditPaymentMappings
+            )) &&
           (!state.ynabFile ||
             !state.ynabPreview?.dateOrderAmbiguous ||
             Boolean(state.ynabDateOrder))
@@ -205,17 +217,20 @@ const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) => {
 
   const handleYnabFile = useCallback(
     async (file: File) => {
-      setIsInspectingYnab(true);
       set({
         ynabFile: null,
         ynabApiSnapshot: null,
         ynabPreview: null,
         ynabDateOrder: undefined,
+        ynabCreditPaymentMappings: undefined,
         ynabSourceNumberFormat: undefined,
       });
+      const request = ynabSourceRequestRef.current;
+      setIsInspectingYnab(true);
       try {
         const bytes = await file.arrayBuffer();
         const preview = await YNABImportService.inspectYNABZip(bytes);
+        if (request !== ynabSourceRequestRef.current) return;
         set({
           ynabFile: {
             name: file.name,
@@ -226,10 +241,11 @@ const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) => {
           budgetName: state.budgetName || file.name.replace(/\.(zip|json)$/i, ''),
         });
       } catch (err) {
+        if (request !== ynabSourceRequestRef.current) return;
         console.error('[Onboarding] Failed to read YNAB file', err);
         toast.error('Could not read that file — try the raw YNAB export .zip.');
       } finally {
-        setIsInspectingYnab(false);
+        if (request === ynabSourceRequestRef.current) setIsInspectingYnab(false);
       }
     },
     [set, state.budgetName]
@@ -240,6 +256,7 @@ const OnboardingFlow: React.FC<OnboardingFlowProps> = ({ onComplete }) => {
       set({
         ynabFile: null,
         ynabDateOrder: undefined,
+        ynabCreditPaymentMappings: undefined,
         ynabSourceNumberFormat: undefined,
         ynabApiSnapshot: snapshot,
         ynabPreview: YNABImportService.inspectYNABApiSnapshot(snapshot),

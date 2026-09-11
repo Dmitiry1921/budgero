@@ -29,6 +29,10 @@ import {
 import { CSVParser } from './csv-parser.js';
 import { CurrencyParser } from './currency-parser.js';
 import { normalizeYNABApiSnapshot, type NormalizedYNABApiImport } from './ynab-api-normalizer.js';
+import {
+  inspectYNABCreditPaymentMappings,
+  resolveYNABCreditPaymentMappings,
+} from './ynab-credit-payment-mapping.js';
 
 import { createLogger } from '../../logger.js';
 
@@ -458,7 +462,12 @@ export class YNABImportService {
 
   static inspectYNABApiSnapshot(snapshot: YNABApiPlanSnapshot): YNABImportPreview {
     const { registerRows, budgetRows, accountSpecs } = normalizeYNABApiSnapshot(snapshot);
-    return { ...inspectYNABRows(registerRows, budgetRows), accountCount: accountSpecs.length };
+    const { matching } = inspectYNABCreditPaymentMappings(snapshot);
+    return {
+      ...inspectYNABRows(registerRows, budgetRows),
+      accountCount: accountSpecs.length,
+      ...(matching ? { creditPaymentMatching: matching } : {}),
+    };
   }
 
   async importYNABFromZip(
@@ -486,6 +495,10 @@ export class YNABImportService {
     snapshot: YNABApiPlanSnapshot,
     config: YNABImportConfig
   ): Promise<YNABImportResult> {
+    const creditPaymentMappings = resolveYNABCreditPaymentMappings(
+      snapshot,
+      config.creditPaymentMappings
+    );
     const {
       registerRows,
       budgetRows,
@@ -499,7 +512,12 @@ export class YNABImportService {
       budgetRows,
       config,
       '123,456.78',
-      accountSpecs,
+      accountSpecs.map((spec) => ({
+        ...spec,
+        ...(creditPaymentMappings.has(spec.ynabAccountId)
+          ? { creditPaymentYNABCategoryId: creditPaymentMappings.get(spec.ynabAccountId)! }
+          : {}),
+      })),
       readyToAssignSpecs,
       categoryMonthSpecs,
       source
@@ -1294,6 +1312,9 @@ export class YNABImportService {
       const creditPaymentCategoryId = spec.creditPaymentYNABCategoryId
         ? categories[`id:${spec.creditPaymentYNABCategoryId}`]
         : undefined;
+      if (spec.creditPaymentYNABCategoryId && creditPaymentCategoryId === undefined) {
+        throw new Error('The selected YNAB payment category was not created during import.');
+      }
       const account = await this.accountService.createAccount(
         accountName,
         budgetId,
@@ -1305,7 +1326,10 @@ export class YNABImportService {
               ...(spec.ynabAccountId ? { ynab_account_id: spec.ynabAccountId } : {}),
               ...(inferredLinkedCategoryId ? { linked_category_id: inferredLinkedCategoryId } : {}),
               ...(creditPaymentCategoryId
-                ? { cc_payment_category_id: creditPaymentCategoryId }
+                ? {
+                    cc_payment_category_id: creditPaymentCategoryId,
+                    ynab_credit_payment_category_id: spec.creditPaymentYNABCategoryId,
+                  }
                 : {}),
             }
           : undefined,

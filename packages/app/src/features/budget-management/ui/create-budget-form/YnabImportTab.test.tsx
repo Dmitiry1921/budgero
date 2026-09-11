@@ -65,6 +65,7 @@ describe('YnabImportTab', () => {
         file={new File(['zip'], 'edge-cases.zip', { type: 'application/zip' })}
         onFileChange={vi.fn()}
         onDateOrderChange={vi.fn()}
+        onCreditPaymentMappingsChange={vi.fn()}
         preview={preview}
         isInspecting={false}
         isImporting={false}
@@ -124,6 +125,7 @@ describe('YnabImportTab', () => {
         file={null}
         onFileChange={vi.fn()}
         onDateOrderChange={vi.fn()}
+        onCreditPaymentMappingsChange={vi.fn()}
         preview={preview}
         isInspecting={false}
         isImporting={false}
@@ -178,6 +180,7 @@ describe('ambiguous ZIP date choice', () => {
         onFileChange: vi.fn(),
         preview: { ...preview, dateOrderAmbiguous: true },
         onDateOrderChange: vi.fn(),
+        onCreditPaymentMappingsChange: vi.fn(),
         isInspecting: false,
         isImporting: false,
         onReset: vi.fn(),
