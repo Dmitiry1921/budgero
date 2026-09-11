@@ -150,6 +150,7 @@ export function CategoryRowCardLayout({
             />
           ) : (
             <CategoryRowHeader
+              budgetId={selectedBudgetId}
               item={item}
               onEditCategory={onEditCategory}
               onDeleteCategory={onDeleteCategory}

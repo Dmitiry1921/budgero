@@ -3,6 +3,12 @@ import { Category, CategoryGroup } from './types.js';
 import { BudgetError, NotFoundError } from '../../types/index.js';
 import { CategoryQueries } from './queries.js';
 import { MonthlyBudgetQueries } from '../monthly-budgets/queries.js';
+import { BudgetQueries } from '../budgets/queries.js';
+import {
+  getGoalFundingSettings,
+  isValidFundingPriority,
+  type FundingPriorityUpdate,
+} from '../goals/funding.js';
 
 export type { Category, CategoryGroup } from './types.js';
 
@@ -22,10 +28,58 @@ export class CategoryService {
     this.monthlyBudgetQueries = new MonthlyBudgetQueries(db);
   }
 
+  private validateFundingPriorities(budgetId: number, updates: FundingPriorityUpdate[]): void {
+    const budget = new BudgetQueries(this.db).getBudget(budgetId);
+    if (!budget) throw new NotFoundError('Budget', budgetId);
+    const { CategoryPriorityMode: mode } = getGoalFundingSettings(budget);
+    for (const update of updates) {
+      if (!isValidFundingPriority(update.priority, mode)) {
+        throw new BudgetError(
+          mode === 'five-levels'
+            ? 'Funding priority must be a whole number from 1 to 5'
+            : 'Funding priority must be a positive safe whole number'
+        );
+      }
+      if (this.getCategory(update.categoryId).BudgetID !== budgetId) {
+        throw new BudgetError('Category must belong to the selected budget');
+      }
+    }
+  }
+
+  updateFundingPriorities(budgetId: number, updates: FundingPriorityUpdate[]): void {
+    this.db.transaction(() => {
+      this.validateFundingPriorities(budgetId, updates);
+      for (const update of updates)
+        this.queries.updateFundingPriority(update.categoryId, update.priority);
+    });
+  }
+
+  updateCategoryDetails(
+    budgetId: number,
+    id: number,
+    name: string,
+    excludeFromBudgetPace: boolean,
+    priority: number
+  ): void {
+    if (!name.trim()) throw new BudgetError('Category name cannot be empty');
+    this.db.transaction(() => {
+      this.validateFundingPriorities(budgetId, [{ categoryId: id, priority }]);
+      this.queries.updateFundingPriority(id, priority);
+      this.updateCategoryName(id, name.trim());
+      this.updateCategoryExcludeFromBudgetPace(id, excludeFromBudgetPace);
+    });
+  }
+
   /**
    * AddCategory - Creates a new category
    */
-  addCategory(categoryGroupId: number, budgetId: number, name: string, note = ''): number {
+  addCategory(
+    categoryGroupId: number,
+    budgetId: number,
+    name: string,
+    note = '',
+    fundingPriority = 3
+  ): number {
     // Validate the category group exists
     if (!this.queries.categoryGroupExists(categoryGroupId)) {
       throw new BudgetError(`category group '${categoryGroupId}' does not exist`);
@@ -35,9 +89,20 @@ export class CategoryService {
       throw new BudgetError('Category group must belong to the selected budget');
     }
     if (group.Name === 'Income') name = this.validateIncomeName(group, name);
+    const mode = getGoalFundingSettings(
+      new BudgetQueries(this.db).getBudget(budgetId)
+    ).CategoryPriorityMode;
+    if (!isValidFundingPriority(fundingPriority, mode))
+      throw new BudgetError('Invalid funding priority');
 
     try {
-      const categoryId = this.queries.insertCategory(name, note, categoryGroupId, budgetId);
+      const categoryId = this.queries.insertCategory(
+        name,
+        note,
+        categoryGroupId,
+        budgetId,
+        fundingPriority
+      );
       return categoryId;
     } catch (error) {
       throw new BudgetError(

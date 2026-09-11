@@ -1,3 +1,5 @@
+import { FundingPriorityBadge } from '@features/category-management/ui/FundingPriorityBadge';
+import { FundingPriorityEditor } from '@features/category-management/ui/FundingPriorityEditor';
 import { MoreVertical, Edit3, Trash, ChevronDown, ChevronRight, EyeOff } from 'lucide-react';
 import { cn } from '@shared/lib/utils';
 import { Button } from '@shared/ui/button';
@@ -7,6 +9,7 @@ import { getStatusColor, getStatusDotClasses, type StatusColorParams } from './c
 
 export interface CategoryRowHeaderProps {
   item: BudgetRow;
+  budgetId: number;
   onEditCategory: (item: BudgetRow) => void;
   onDeleteCategory: (item: BudgetRow) => void;
   onHideCategory?: (item: BudgetRow) => void;
@@ -17,6 +20,7 @@ export interface CategoryRowHeaderProps {
 
 export function CategoryRowHeader({
   item,
+  budgetId,
   onEditCategory,
   onDeleteCategory,
   onHideCategory,
@@ -59,6 +63,7 @@ export function CategoryRowHeader({
         >
           {item.name}
         </span>
+        <FundingPriorityBadge budgetId={budgetId} priority={item.fundingPriority} />
       </div>
       <Popover>
         <PopoverTrigger asChild>
@@ -71,7 +76,14 @@ export function CategoryRowHeader({
             <MoreVertical className="h-3.5 w-3.5" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-36" align="end">
+        <PopoverContent className="w-64" align="end">
+          <div className="mb-2 border-b pb-3">
+            <FundingPriorityEditor
+              budgetId={budgetId}
+              categoryIds={[item.categoryId]}
+              priority={item.fundingPriority ?? 3}
+            />
+          </div>
           <div className="space-y-1">
             <Button
               variant="ghost"
@@ -114,6 +126,7 @@ export function CategoryRowHeader({
 
 export interface DesktopCompactHeaderProps {
   item: BudgetRow;
+  budgetId: number;
   onEditCategory: (item: BudgetRow) => void;
   onDeleteCategory: (item: BudgetRow) => void;
   onHideCategory?: (item: BudgetRow) => void;
@@ -121,6 +134,7 @@ export interface DesktopCompactHeaderProps {
 
 export function DesktopCompactHeader({
   item,
+  budgetId,
   onEditCategory,
   onDeleteCategory,
   onHideCategory,
@@ -142,6 +156,7 @@ export function DesktopCompactHeader({
         >
           {item.name}
         </span>
+        <FundingPriorityBadge budgetId={budgetId} priority={item.fundingPriority} />
       </div>
       <Popover>
         <PopoverTrigger asChild>
@@ -154,7 +169,14 @@ export function DesktopCompactHeader({
             <MoreVertical className="h-3.5 w-3.5" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-36" align="end">
+        <PopoverContent className="w-64" align="end">
+          <div className="mb-2 border-b pb-3">
+            <FundingPriorityEditor
+              budgetId={budgetId}
+              categoryIds={[item.categoryId]}
+              priority={item.fundingPriority ?? 3}
+            />
+          </div>
           <div className="space-y-1">
             <Button
               variant="ghost"

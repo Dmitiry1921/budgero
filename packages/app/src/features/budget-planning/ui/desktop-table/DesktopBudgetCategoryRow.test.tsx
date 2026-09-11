@@ -10,6 +10,14 @@ vi.mock('@features/budget-planning/ui/AvailableInfoPopover', () => ({
   AvailableInfoPopover: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
 }));
 
+vi.mock('@entities/budget/api/useGoalFundingSettings', () => ({
+  useGoalFundingSettings: () => ({
+    CategoryPriorityMode: 'five-levels',
+    ShowCategoryPriorities: true,
+    isReady: true,
+  }),
+}));
+
 const row: BudgetRow = {
   id: 'c1',
   name: 'Groceries',

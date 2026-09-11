@@ -66,6 +66,7 @@ export function useCategorySelection({
         CategoryGroupID: fallbackRow.categoryGroupId ?? 0,
         BudgetID: selectedBudgetId || budgetId,
         Position: 0,
+        FundingPriority: fallbackRow.fundingPriority ?? 3,
       };
     },
     [budgetId, rowsByCategoryId, selectedBudgetId]

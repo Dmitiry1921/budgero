@@ -5,6 +5,32 @@ import { executeSpaceMutation } from '@shared/runtime/mutation-router';
 import { resolveSpaceKey } from '@shared/lib/query-utils';
 import type { CategoryGroup, Category } from '@budgero/core/browser';
 
+export function useUpdateFundingPriorities() {
+  const runtime = useRuntime();
+  return useMutation<void, Error, { budgetId: number; categoryIds: number[]; priority: number }>({
+    mutationFn: ({ budgetId, categoryIds, priority }) =>
+      executeSpaceMutation(runtime, {
+        op: 'categories.updateFundingPriorities',
+        payload: {
+          budgetId,
+          updates: [...new Set(categoryIds)].map((categoryId) => ({ categoryId, priority })),
+        },
+      }),
+  });
+}
+
+export function useUpdateCategoryDetails() {
+  const runtime = useRuntime();
+  return useMutation<
+    void,
+    Error,
+    { budgetId: number; id: number; name: string; excludeFromBudgetPace: boolean; priority: number }
+  >({
+    mutationFn: (payload) =>
+      executeSpaceMutation(runtime, { op: 'categories.updateDetails', payload }),
+  });
+}
+
 /**
  * Fetch all category groups for a given budget.
  */

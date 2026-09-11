@@ -63,6 +63,7 @@ export function CategoryRowDesktopCompactGrid({
     <div className="hidden md:grid grid-cols-[minmax(0,1fr)_minmax(96px,120px)_minmax(96px,120px)_minmax(96px,120px)] items-center gap-2 text-xs md:text-[13px] lg:text-sm">
       {/* Category name and actions */}
       <DesktopCompactHeader
+        budgetId={selectedBudgetId}
         item={item}
         onEditCategory={onEditCategory}
         onDeleteCategory={onDeleteCategory}

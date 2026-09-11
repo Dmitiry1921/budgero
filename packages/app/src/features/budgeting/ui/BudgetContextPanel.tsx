@@ -1,3 +1,5 @@
+import { useGoalFundingSettings } from '@entities/budget/api/useGoalFundingSettings';
+import { FundingPriorityEditor } from '@features/category-management/ui/FundingPriorityEditor';
 import { useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@shared/ui/card';
 import type { EChartsCoreOption } from 'echarts/core';
@@ -164,6 +166,7 @@ export function BudgetContextPanel({
         (row) =>
           ({
             CategoryID: row.categoryId,
+            FundingPriority: row.fundingPriority ?? 3,
             Category: row.name,
             Assigned: row.assigned,
             Activity: row.activity,
@@ -190,19 +193,32 @@ export function BudgetContextPanel({
     currentMonth
   );
 
-  const { data: categoryGoals = [] } = useGoalsByCategories(
+  const categoryGoalsQuery = useGoalsByCategories(
     selectedCategory ? [selectedCategory.categoryId] : []
   );
 
+  const categoryGoals = categoryGoalsQuery.data;
   const monthlyGoal = categoryGoals?.find(
     (g) => g.CategoryID === selectedCategory?.categoryId && g.Type === 'monthly'
   )?.Target;
 
   // All goals of the budget, for the underfunded total in the Summary card.
-  const { data: allGoals = [] } = useGoals(budgetId);
+  const goalsQuery = useGoals(budgetId);
+  const allGoals = useMemo(() => goalsQuery.data ?? [], [goalsQuery.data]);
+  const settings = useGoalFundingSettings(budgetId);
 
   // Yearly/target-date goals need assignment history for cycle-aware progress
-  const { data: cycleFinancials } = useCycleFinancialsForGoals(allGoals, currentMonth);
+  const cycleQuery = useCycleFinancialsForGoals(allGoals, currentMonth);
+  const cycleFinancials = cycleQuery.data;
+  const needsCycles = allGoals.some(
+    (goal) => goal.Type === 'yearly' || goal.Type === 'target-date'
+  );
+  const fundingReady =
+    settings.isReady &&
+    goalsQuery.isSuccess &&
+    !goalsQuery.isFetching &&
+    (!selectedCategory || (categoryGoalsQuery.isSuccess && !categoryGoalsQuery.isFetching)) &&
+    (!needsCycles || (cycleQuery.isSuccess && !cycleQuery.isFetching));
 
   // Total still needed this month across the goals of the rows in scope
   // (the selection, or every category). Same maths as the assign dropdown's
@@ -258,6 +274,7 @@ export function BudgetContextPanel({
     const rowData = [
       {
         CategoryID: selectedCategory.categoryId,
+        FundingPriority: selectedCategory.fundingPriority ?? 3,
         Category: selectedCategory.name,
         Assigned: selectedCategory.assigned,
         Activity: selectedCategory.activity,
@@ -599,16 +616,14 @@ export function BudgetContextPanel({
 
   const handleFundGoal = () => {
     const underfunded = goalQuickActions?.underfunded;
-    if (!underfunded || !selectedCategory) return;
-    handleApplyAssignments(
-      [
-        {
-          categoryId: underfunded.categoryId,
-          amount: selectedCategory.assigned + underfunded.needed,
-        },
-      ],
-      'Goal funded'
+    if (!fundingReady || !underfunded || !selectedCategory) return;
+    const { batchAssignments } = prepareUnderfundedAssignments(
+      [underfunded],
+      allowOverAssignment ? underfunded.needed : Math.max(0, readyToAssign),
+      selectedBudgetRows,
+      settings.GoalFundingDistribution
     );
+    if (batchAssignments.length) handleApplyAssignments(batchAssignments, 'Added goal funding');
   };
 
   const handleReduceOverfunding = () => {
@@ -639,10 +654,12 @@ export function BudgetContextPanel({
   };
 
   const handleFundUnderfunded = () => {
+    if (!fundingReady || underfundedQuickActionAmount <= 0) return;
     const { assignments, batchAssignments } = prepareUnderfundedAssignments(
       underfundedSummary.goals,
       underfundedQuickActionAmount,
-      selectedBudgetRows
+      selectedBudgetRows,
+      settings.GoalFundingDistribution
     );
     const total = sumMilli(assignments.map((assignment) => assignment.amount));
     handleApplyAssignments(
@@ -751,7 +768,9 @@ export function BudgetContextPanel({
             onClick={handleFundUnderfunded}
             pending={batchUpsertAssignments.isPending}
             disabled={
-              underfundedSummary.count === 0 || (readyToAssign <= 0 && !allowOverAssignment)
+              !fundingReady ||
+              underfundedSummary.count === 0 ||
+              (readyToAssign <= 0 && !allowOverAssignment)
             }
             suffix={`+${formatAmount(underfundedQuickActionAmount)}`}
           />
@@ -762,7 +781,8 @@ export function BudgetContextPanel({
             label="Fund goal"
             onClick={handleFundGoal}
             pending={batchUpsertAssignments.isPending}
-            suffix={`+${formatAmount(goalQuickActions.underfunded.needed)}`}
+            disabled={!fundingReady || (readyToAssign <= 0 && !allowOverAssignment)}
+            suffix={`+${formatAmount(allowOverAssignment ? goalQuickActions.underfunded.needed : Math.min(goalQuickActions.underfunded.needed, Math.max(0, readyToAssign)))}`}
           />
         )}
         {goalQuickActions?.overfunded && (
@@ -807,6 +827,23 @@ export function BudgetContextPanel({
       {/* When a single category is selected its stats already show in the table row,
           so lead with Quick Actions instead of repeating them. */}
       {selectedCategory ? quickActionsCard : summaryCard}
+      {selectedCategoryIds.length > 0 && selectedRows.length > 0 && (
+        <Card className={cardClass}>
+          <CardContent className={contentClass}>
+            <FundingPriorityEditor
+              budgetId={budgetId}
+              categoryIds={selectedRows.map((row) => row.categoryId)}
+              priority={
+                selectedRows.every(
+                  (row) => (row.fundingPriority ?? 3) === (selectedRows[0].fundingPriority ?? 3)
+                )
+                  ? (selectedRows[0].fundingPriority ?? 3)
+                  : null
+              }
+            />
+          </CardContent>
+        </Card>
+      )}
 
       {selectedCategory && (
         <Card className={cardClass}>

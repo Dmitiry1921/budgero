@@ -47,6 +47,8 @@ export interface CategoryModalState {
   editModalOpen: boolean;
   editingCategory: {
     id: number;
+    budgetId: number;
+    fundingPriority: number;
     name: string;
     excludeFromBudgetPace: boolean;
   } | null;

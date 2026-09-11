@@ -271,6 +271,8 @@ export function BudgetTable({
         editModalOpen: true,
         editingCategory: {
           id: item.categoryId,
+          budgetId: categoryData.BudgetID,
+          fundingPriority: categoryData.FundingPriority ?? 3,
           name: item.name,
           excludeFromBudgetPace: categoryData.ExcludeFromBudgetPace || false,
         },
@@ -343,12 +345,13 @@ export function BudgetTable({
       onEditModalClose={() =>
         setModalState((prev) => ({ ...prev, editModalOpen: false, editingCategory: null }))
       }
-      onSaveCategoryEdit={async (name, excludeFromBudgetPace) => {
+      onSaveCategoryEdit={async (name, excludeFromBudgetPace, priority) => {
         if (modalState.editingCategory) {
           await handleSaveCategoryEdit(
             modalState.editingCategory,
             name,
             excludeFromBudgetPace,
+            priority,
             () => {
               setModalState((prev) => ({ ...prev, editModalOpen: false, editingCategory: null }));
             }

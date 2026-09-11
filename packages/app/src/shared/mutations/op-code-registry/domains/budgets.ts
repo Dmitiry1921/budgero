@@ -1,6 +1,49 @@
+import {
+  getGoalFundingSettings,
+  type GoalFundingSettings,
+  type FundingPriorityUpdate,
+} from '@budgero/core/browser';
 import { S, type OpCodeEntry } from '../shared';
 
 export const budgetOps = {
+  'budgets.updateGoalFundingSettings': {
+    execute: async (args) =>
+      S().budgets.updateGoalFundingSettings(
+        args.id as number,
+        args.settings as Partial<GoalFundingSettings>,
+        args.restorePriorities as FundingPriorityUpdate[] | undefined
+      ),
+    invalidates: [['budgets'], ['categories', '*'], ['monthlyBudget', '*']],
+    undo: {
+      capture: async (args) => {
+        const settings = getGoalFundingSettings(S().budgets.getBudget(args.id as number));
+        const restoringIds = new Set(
+          ((args.restorePriorities as FundingPriorityUpdate[]) ?? []).map(
+            (entry) => entry.categoryId
+          )
+        );
+        const converts =
+          (args.settings as Partial<GoalFundingSettings>).CategoryPriorityMode === 'five-levels';
+        const restorePriorities = S()
+          .categories.getAllCategories(args.id as number)
+          .filter(
+            (category) =>
+              restoringIds.has(category.ID) || (converts && (category.FundingPriority ?? 3) > 5)
+          )
+          .map((category) => ({
+            categoryId: category.ID,
+            priority: category.FundingPriority ?? 3,
+          }));
+        return { settings, restorePriorities };
+      },
+      build: (args, _result, before) => [
+        {
+          op: 'budgets.updateGoalFundingSettings',
+          args: { id: args.id, ...(before as Record<string, unknown>) },
+        },
+      ],
+    },
+  },
   'budgets.create': {
     execute: async (args) => {
       return await S().budgets!.createBudget({

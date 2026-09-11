@@ -1,3 +1,5 @@
+import { FundingPriorityBadge } from '@features/category-management/ui/FundingPriorityBadge';
+import { FundingPriorityEditor } from '@features/category-management/ui/FundingPriorityEditor';
 /**
  * Desktop Budget Category Row Component
  *
@@ -205,6 +207,7 @@ export function DesktopBudgetCategoryRow({
           >
             {row.name}
           </span>
+          <FundingPriorityBadge budgetId={selectedBudgetId} priority={row.fundingPriority} />
           <Popover>
             <PopoverTrigger asChild>
               <Button
@@ -216,7 +219,14 @@ export function DesktopBudgetCategoryRow({
                 <MoreVertical className="h-4 w-4" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-40" align="start">
+            <PopoverContent className="w-64" align="start">
+              <div className="mb-2 border-b pb-3">
+                <FundingPriorityEditor
+                  budgetId={selectedBudgetId}
+                  categoryIds={[row.categoryId]}
+                  priority={row.fundingPriority ?? 3}
+                />
+              </div>
               <div className="space-y-1">
                 <Button
                   variant="ghost"

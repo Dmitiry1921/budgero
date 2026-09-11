@@ -5,6 +5,13 @@ import { ValidationError, NotFoundError } from '../../types/index.js';
 import { isCryptoCurrency } from '../../currencies/index.js';
 import { BudgetQueries } from './queries.js';
 import { CurrencyService } from '../currency/index.js';
+import { CategoryService } from '../categories/index.js';
+import {
+  getGoalFundingSettings,
+  isValidFundingPriority,
+  type GoalFundingSettings,
+  type FundingPriorityUpdate,
+} from '../goals/funding.js';
 
 /**
  * BudgetService - Port of Go budgets service
@@ -125,6 +132,57 @@ export class BudgetService {
    */
   updateRtaMode(id: number, mode: RtaMode): void {
     this.queries.updateRtaMode(id, mode);
+  }
+
+  /** Settings and any five-level conversion are a single reversible transaction. */
+  updateGoalFundingSettings(
+    id: number,
+    patch: Partial<GoalFundingSettings>,
+    restorePriorities: FundingPriorityUpdate[] = []
+  ): void {
+    const current = getGoalFundingSettings(this.getBudget(id));
+    const next = { ...current, ...patch };
+    if (
+      !['five-levels', 'numeric'].includes(next.CategoryPriorityMode) ||
+      !['proportional-shortfall', 'equal-completion'].includes(next.GoalFundingDistribution) ||
+      typeof next.ShowCategoryPriorities !== 'boolean'
+    ) {
+      throw new ValidationError('Invalid goal funding settings');
+    }
+    this.db.transaction(() => {
+      const categories = new CategoryService(this.db);
+      for (const update of restorePriorities) {
+        if (
+          categories.getCategory(update.categoryId).BudgetID !== id ||
+          !isValidFundingPriority(update.priority, next.CategoryPriorityMode)
+        ) {
+          throw new ValidationError('Invalid category priority restore');
+        }
+      }
+      run(
+        this.db,
+        `UPDATE budgets SET CategoryPriorityMode = ?, GoalFundingDistribution = ?, ShowCategoryPriorities = ? WHERE ID = ?`,
+        next.CategoryPriorityMode,
+        next.GoalFundingDistribution,
+        next.ShowCategoryPriorities ? 1 : 0,
+        id
+      );
+      if (next.CategoryPriorityMode === 'five-levels') {
+        run(
+          this.db,
+          'UPDATE categories SET FundingPriority = 5 WHERE BudgetID = ? AND FundingPriority > 5',
+          id
+        );
+      }
+      for (const update of restorePriorities) {
+        run(
+          this.db,
+          'UPDATE categories SET FundingPriority = ? WHERE ID = ?',
+          update.priority,
+          update.categoryId
+        );
+      }
+    });
   }
 
   /**

@@ -1,3 +1,5 @@
+import { isValidFundingPriority } from '@budgero/core/browser';
+import { useGoalFundingSettings } from '@entities/budget/api/useGoalFundingSettings';
 import React, { useState, useEffect } from 'react';
 import {
   Dialog,
@@ -12,13 +14,16 @@ import { Input } from '@shared/ui/input';
 import { Label } from '@shared/ui/label';
 import { Switch } from '@shared/ui/switch';
 import { toast } from 'sonner';
+import { FundingPriorityInput } from './FundingPriorityInput';
 
 interface CategoryEditDialogProps {
   open: boolean;
   onClose: () => void;
   categoryName: string;
+  budgetId: number;
+  fundingPriority: number;
   excludeFromBudgetPace: boolean;
-  onSave: (name: string, excludeFromBudgetPace: boolean) => void;
+  onSave: (name: string, excludeFromBudgetPace: boolean, priority: number) => void;
   isSaving?: boolean;
 }
 
@@ -26,10 +31,14 @@ export const CategoryEditDialog: React.FC<CategoryEditDialogProps> = ({
   open,
   onClose,
   categoryName,
+  budgetId,
+  fundingPriority,
   excludeFromBudgetPace,
   onSave,
   isSaving = false,
 }) => {
+  const settings = useGoalFundingSettings(budgetId);
+  const [priority, setPriority] = useState(String(fundingPriority));
   const [name, setName] = useState(categoryName);
   const [exclude, setExclude] = useState(excludeFromBudgetPace);
 
@@ -37,10 +46,11 @@ export const CategoryEditDialog: React.FC<CategoryEditDialogProps> = ({
     if (open) {
       queueMicrotask(() => {
         setName(categoryName);
+        setPriority(String(fundingPriority));
         setExclude(excludeFromBudgetPace);
       });
     }
-  }, [open, categoryName, excludeFromBudgetPace]);
+  }, [open, categoryName, excludeFromBudgetPace, fundingPriority]);
 
   const handleSave = () => {
     if (!name.trim()) {
@@ -48,7 +58,12 @@ export const CategoryEditDialog: React.FC<CategoryEditDialogProps> = ({
       return;
     }
 
-    onSave(name.trim(), exclude);
+    if (isSaving || !settings.isReady) return;
+    if (!isValidFundingPriority(Number(priority), settings.CategoryPriorityMode)) {
+      toast.error('Enter a valid funding priority');
+      return;
+    }
+    onSave(name.trim(), exclude, Number(priority));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -62,7 +77,9 @@ export const CategoryEditDialog: React.FC<CategoryEditDialogProps> = ({
       <DialogContent className="w-[95vw] max-w-md mx-auto">
         <DialogHeader>
           <DialogTitle>Edit Category</DialogTitle>
-          <DialogDescription>Update the category name and budget pace settings.</DialogDescription>
+          <DialogDescription>
+            Update the category name, funding priority, and budget pace settings.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-4">
@@ -78,6 +95,12 @@ export const CategoryEditDialog: React.FC<CategoryEditDialogProps> = ({
             />
           </div>
 
+          <FundingPriorityInput
+            value={priority}
+            onChange={setPriority}
+            mode={settings.CategoryPriorityMode}
+            disabled={isSaving || !settings.isReady}
+          />
           <div className="flex items-center justify-between space-x-2">
             <div className="space-y-0.5">
               <Label htmlFor="exclude-budget-pace" className="text-sm font-medium">
@@ -95,7 +118,7 @@ export const CategoryEditDialog: React.FC<CategoryEditDialogProps> = ({
           <Button variant="outline" onClick={onClose} disabled={isSaving}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={isSaving}>
+          <Button onClick={handleSave} disabled={isSaving || !settings.isReady}>
             {isSaving ? 'Saving...' : 'Save Changes'}
           </Button>
         </DialogFooter>

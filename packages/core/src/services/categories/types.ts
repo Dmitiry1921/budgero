@@ -24,5 +24,6 @@ export interface Category {
   CategoryGroupID: number;
   BudgetID: number;
   ExcludeFromBudgetPace?: boolean;
+  FundingPriority?: number;
   Position: number;
 }

@@ -1,3 +1,5 @@
+import { FundingPriorityBadge } from '@features/category-management/ui/FundingPriorityBadge';
+import { FundingPriorityEditor } from '@features/category-management/ui/FundingPriorityEditor';
 import { Edit3, Trash, ChevronRight, EyeOff } from 'lucide-react';
 import type { PointerEvent, MouseEvent } from 'react';
 import { cn } from '@shared/lib/utils';
@@ -129,6 +131,7 @@ export function CategoryRowTableLayout({
           <span className="text-[11px] truncate" title={item.name}>
             {item.name}
           </span>
+          <FundingPriorityBadge budgetId={selectedBudgetId} priority={item.fundingPriority} />
         </div>
 
         {/* Allocated column */}
@@ -241,6 +244,13 @@ export function CategoryRowTableLayout({
             </div>
           </div>
 
+          <div className="border-t border-border/20 py-2">
+            <FundingPriorityEditor
+              budgetId={selectedBudgetId}
+              categoryIds={[item.categoryId]}
+              priority={item.fundingPriority ?? 3}
+            />
+          </div>
           {/* Goal section */}
           <div className="pt-1 border-t border-border/20">
             <GoalSection

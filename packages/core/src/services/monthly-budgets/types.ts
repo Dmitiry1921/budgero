@@ -63,6 +63,7 @@ export interface DebtSource {
  * Monthly budget row - represents a row in the monthly budget view
  */
 export interface GetMonthlyBudgetRow {
+  FundingPriority?: number;
   Category: string;
   CategoryID: number;
   CategoryGroup: string;

@@ -9,8 +9,7 @@ import {
   useCategories,
   useDeleteCategoryGroup,
   useUpdateCategoryGroup,
-  useUpdateCategoryName,
-  useUpdateCategoryExcludeFromBudgetPace,
+  useUpdateCategoryDetails,
   useDeleteCategory,
   useAddCategory,
   useAddCategoryGroup,
@@ -63,8 +62,7 @@ export function useCategoryOperations({
   const deleteCategoryGroupMutation = useDeleteCategoryGroup();
   const updateCategoryGroupMutation = useUpdateCategoryGroup();
   const upsertAssignmentMutation = useUpsertAssignment();
-  const updateCategoryNameMutation = useUpdateCategoryName();
-  const updateCategoryExcludeFromBudgetPaceMutation = useUpdateCategoryExcludeFromBudgetPace();
+  const updateCategoryDetailsMutation = useUpdateCategoryDetails();
   const deleteCategoryMutation = useDeleteCategory();
   const createCategoryGroupMutation = useAddCategoryGroup();
   const createCategoryMutation = useAddCategory();
@@ -188,43 +186,26 @@ export function useCategoryOperations({
 
   const handleSaveCategoryEdit = useCallback(
     async (
-      editingCategory: { id: number; name: string; excludeFromBudgetPace: boolean },
+      editingCategory: { id: number; budgetId: number },
       name: string,
       excludeFromBudgetPace: boolean,
+      priority: number,
       onSuccess: () => void
     ) => {
       try {
-        const categoryData = categories?.find((c) => c.ID === editingCategory.id);
-
-        if (categoryData?.Name !== name) {
-          await updateCategoryNameMutation.mutateAsync({
-            id: editingCategory.id,
-            name,
-            budgetId: selectedBudgetId || 0,
-          });
-        }
-
-        if (categoryData?.ExcludeFromBudgetPace !== excludeFromBudgetPace) {
-          await updateCategoryExcludeFromBudgetPaceMutation.mutateAsync({
-            id: editingCategory.id,
-            excludeFromBudgetPace,
-            budgetId: selectedBudgetId || 0,
-          });
-        }
-
+        await updateCategoryDetailsMutation.mutateAsync({
+          id: editingCategory.id,
+          budgetId: editingCategory.budgetId,
+          name,
+          excludeFromBudgetPace,
+          priority,
+        });
         onSuccess();
       } catch {
-        toast.error('Failed to update category', {
-          description: 'Please try again.',
-        });
+        toast.error('Failed to update category', { description: 'Please try again.' });
       }
     },
-    [
-      categories,
-      selectedBudgetId,
-      updateCategoryExcludeFromBudgetPaceMutation,
-      updateCategoryNameMutation,
-    ]
+    [updateCategoryDetailsMutation]
   );
 
   const handleConfirmDelete = useCallback(
@@ -561,8 +542,7 @@ export function useCategoryOperations({
     isCreatingGroup: createCategoryGroupMutation.isPending,
     isCreatingCategory: createCategoryMutation.isPending,
     isDeletingCategory: deleteCategoryMutation.isPending,
-    isSavingCategoryEdit:
-      updateCategoryNameMutation.isPending || updateCategoryExcludeFromBudgetPaceMutation.isPending,
+    isSavingCategoryEdit: updateCategoryDetailsMutation.isPending,
     isDeletingCategoryWithData: reassignAndDeleteCategoryMutation.isPending,
   };
 }

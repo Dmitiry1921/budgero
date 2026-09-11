@@ -1,5 +1,6 @@
 export * from './database/index.js';
 export * from './money/index.js';
+export * from './services/goals/funding.js';
 export * from './currencies/index.js';
 export * from './services/index.js';
 export * from './types/index.js';

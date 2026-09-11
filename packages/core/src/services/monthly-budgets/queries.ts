@@ -1115,6 +1115,7 @@ export class MonthlyBudgetQueries {
       SELECT
         COALESCE(c.Name, '') AS Category,
         COALESCE(c.ID, -1) as CategoryID,
+        COALESCE(c.FundingPriority, 3) AS FundingPriority,
         cg.Name AS CategoryGroup,
         cg.ID as CategoryGroupID,
         COALESCE(tc.count, 0) AS TotalTransactionCount,

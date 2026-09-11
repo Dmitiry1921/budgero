@@ -1,7 +1,8 @@
 import { useState, useMemo, useCallback } from 'react';
 import { toast } from 'sonner';
 import { useBatchUpsertAssignments } from '@entities/budget/api/useMonthlyBudget';
-import { useCycleFinancialsForGoals } from '@entities/goal/api/useGoals';
+import { useGoalFundingSettings } from '@entities/budget/api/useGoalFundingSettings';
+import { useGoals, useCycleFinancialsForGoals } from '@entities/goal/api/useGoals';
 import type { GetMonthlyBudgetRow, Goal } from '@budgero/core/browser';
 import { asMilli, formatMilli, type MilliUnits } from '@shared/lib/currency/milli';
 import {
@@ -36,6 +37,7 @@ export interface UseAssignDropdownStateProps {
 
 export interface UseAssignDropdownStateReturn {
   isAssigning: boolean;
+  fundingReady: boolean;
   underfundedGoals: UnderfundedGoal[];
   overspentCategories: OverspentCategory[];
   overfundedCategories: OverfundedCategory[];
@@ -66,7 +68,16 @@ export function useAssignDropdownState({
   const currencyCode = globalLocalizer.resolvedOptions().currency ?? 'USD';
 
   // Yearly/target-date goals need assignment history to compute cycle totals
-  const { data: cycleFinancials } = useCycleFinancialsForGoals(goals, currentMonth);
+  const settings = useGoalFundingSettings(budgetId);
+  const goalsQuery = useGoals(budgetId);
+  const cycleQuery = useCycleFinancialsForGoals(goals, currentMonth);
+  const cycleFinancials = cycleQuery.data;
+  const needsCycles = goals.some((goal) => goal.Type === 'yearly' || goal.Type === 'target-date');
+  const fundingReady =
+    settings.isReady &&
+    goalsQuery.isSuccess &&
+    !goalsQuery.isFetching &&
+    (!needsCycles || (cycleQuery.isSuccess && !cycleQuery.isFetching));
 
   const underfundedGoals = useMemo(
     () => calculateUnderfundedGoals(goals, budgetData, currencyCode, currentMonth, cycleFinancials),
@@ -90,6 +101,7 @@ export function useAssignDropdownState({
     readyToAssign <= 0 && overfundedCategories.length > 0 && !allowOverAssignment;
 
   const handleAutoAssignUnderfunded = useCallback(async () => {
+    if (!fundingReady) return;
     if (underfundedGoals.length === 0) {
       toast.success('No underfunded goals', {
         description: 'All goals are fully funded!',
@@ -100,11 +112,14 @@ export function useAssignDropdownState({
     setIsAssigning(true);
 
     try {
+      const allowance = allowOverAssignment ? totalUnderfunded : Math.max(0, readyToAssign);
       const { assignments, remaining, batchAssignments } = prepareUnderfundedAssignments(
         underfundedGoals,
-        readyToAssign,
-        budgetData
+        allowance,
+        budgetData,
+        settings.GoalFundingDistribution
       );
+      if (!batchAssignments.length) return;
 
       // Execute all assignments in a single batch (one op, one invalidation)
       await batchUpsertAssignments.mutateAsync(
@@ -122,7 +137,7 @@ export function useAssignDropdownState({
         description: (
           <div className="mt-2 space-y-1">
             <div className="text-sm font-medium">
-              Total: {formatMilli(globalLocalizer, asMilli(readyToAssign - remaining))}
+              Total: {formatMilli(globalLocalizer, asMilli(allowance - remaining))}
             </div>
             <div className="text-xs text-muted-foreground whitespace-pre-line">
               {details}
@@ -139,6 +154,10 @@ export function useAssignDropdownState({
       setIsAssigning(false);
     }
   }, [
+    fundingReady,
+    allowOverAssignment,
+    totalUnderfunded,
+    settings.GoalFundingDistribution,
     underfundedGoals,
     readyToAssign,
     budgetData,
@@ -362,6 +381,7 @@ export function useAssignDropdownState({
   }, [budgetData, currentMonth, budgetId, globalLocalizer, batchUpsertAssignments]);
 
   return {
+    fundingReady,
     isAssigning,
     underfundedGoals,
     overspentCategories,

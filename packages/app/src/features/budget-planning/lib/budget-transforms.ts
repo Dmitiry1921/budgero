@@ -28,6 +28,7 @@ export interface BudgetRow {
   isGroup: boolean;
   parentId?: string;
   categoryId: number;
+  fundingPriority?: number;
   categoryGroupId?: number;
   goalStatus?: 'funded' | 'offtrack' | 'none';
   goal?: Goal;
@@ -165,6 +166,7 @@ export function transformBudgetRows(
         isGroup: false,
         parentId: groupKey,
         categoryId: item.CategoryID,
+        fundingPriority: item.FundingPriority ?? 3,
         categoryGroupId: item.CategoryGroupID,
         goal,
         goalStatus,

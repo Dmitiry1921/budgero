@@ -41,6 +41,7 @@ export function AssignDropdown({
   const maskedLocalizer = useMaskedLocalizer(globalLocalizer);
   const {
     isAssigning,
+    fundingReady,
     underfundedGoals,
     overspentCategories,
     overfundedCategories,
@@ -83,6 +84,7 @@ export function AssignDropdown({
         <DropdownMenuSeparator />
 
         <AssignQuickActions
+          fundingReady={fundingReady}
           readyToAssign={readyToAssign}
           isAssigning={isAssigning}
           underfundedGoals={underfundedGoals}

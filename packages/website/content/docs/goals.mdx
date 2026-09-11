@@ -121,6 +121,38 @@ You can always assign to goal categories by hand, but two quick actions in the *
 
 A common monthly rhythm: income arrives → Fund Goals → distribute what's left to flexible categories by hand. Five minutes, done.
 
+## Category funding priorities
+
+Every category has a funding priority that stays the same across months. Lower numbers fund first, regardless of the category's position or group. The default choices are **1 Highest, 2 High, 3 Normal, 4 Low, and 5 Lowest**. Existing and new categories start at **3 — Normal**.
+
+Change a priority in **Edit Category**, directly in the category row menu, or in the budgeting side panel after selecting categories. Multiple selections show their shared priority or **Mixed**; applying a value changes the selection together and can be undone in one step. In numeric mode, enter the number and press **Apply priority**. Categories without goals can keep a priority, but Fund Goals only assigns money to eligible goals.
+
+Under **Settings → Budgeting → Goal funding**, each budget can choose:
+
+- **Priority choices:** five levels, or any positive whole number. Switching back to five levels converts priorities above 5 to 5. The setting and conversion undo together; switching to numeric mode preserves values.
+- **Sharing within a priority:** proportional shortfalls (the default), or equal completion percentage.
+- **Show priority badges:** enabled by default. Non-default priorities appear as **P1**, **P2**, etc. beside category names on desktop and mobile. Hiding badges does not affect funding.
+
+These settings are saved with the budget and sync across devices.
+
+### How limited money is shared
+
+Fund Goals fully covers each priority tier before moving to the next. When money runs out within a tier:
+
+- **Proportional shortfalls** covers the same fraction of each category's remaining need.
+- **Equal completion percentage** helps the least-funded categories catch up toward a common percentage of this month's requirement, without taking away existing assignments. Existing deficits are included in that progress. If a tier contains a goal with a nonpositive monthly requirement, it uses proportional shortfalls instead.
+
+For two equally prioritized €100 monthly requirements, already funded at €80 and €0, with €60 available:
+
+| Sharing method              | Added to the first / second category | Final completion |
+| --------------------------- | ------------------------------------ | ---------------- |
+| Proportional shortfalls     | €10 / €50                            | 90% / 50%        |
+| Equal completion percentage | €0 / €60                             | 80% / 60%        |
+
+Yearly, repeating, and target-date goals still use their existing monthly milestones. Equal completion measures progress toward that month's requirement, not cumulative savings. Allocation uses exact milliunits; rounding ties use category IDs, so dragging categories or groups does not affect funding.
+
+With **Allow over-assignment** disabled, funding uses at most positive Ready to Assign. When enabled, it covers the full eligible shortfall, even if Ready to Assign becomes negative. The Assign menu and budgeting side panel use the same rules; selecting categories in the panel limits funding to that selection, while no selection includes the whole budget. Each funding action saves as one batch with one-step undo.
+
 ## When a goal stops fitting
 
 Goals are statements of intent, not contracts. If a target-date goal keeps showing red, you have exactly three honest options: assign more, move the date, or shrink the target. All three are better than ignoring a red bar until it becomes background noise — a budget you've stopped believing stops working.

@@ -9,6 +9,10 @@ import { Category, CategoryGroup } from './types.js';
 export class CategoryQueries {
   constructor(private db: DatabaseAdapter) {}
 
+  updateFundingPriority(id: number, priority: number): void {
+    run(this.db, 'UPDATE categories SET FundingPriority = ? WHERE ID = ?', priority, id);
+  }
+
   /**
    * GetMaxCategoryGroupPosition - Get the maximum position for category groups in a budget
    */
@@ -170,21 +174,28 @@ export class CategoryQueries {
    * InsertCategory - Creates a new category
    * SQL: INSERT INTO categories (name, note, category_group_id, budget_id, exclude_from_budget_pace, position) VALUES (?1, ?2, ?3, ?4, 0, ?5) RETURNING id;
    */
-  insertCategory(name: string, note: string, categoryGroupId: number, budgetId: number): number {
+  insertCategory(
+    name: string,
+    note: string,
+    categoryGroupId: number,
+    budgetId: number,
+    fundingPriority = 3
+  ): number {
     const maxPos = this.getMaxCategoryPosition(categoryGroupId);
     const position = maxPos + 1;
 
     const result = run(
       this.db,
       `
-      INSERT INTO categories (Name, Note, CategoryGroupID, BudgetID, ExcludeFromBudgetPace, Position)
-      VALUES (?1, ?2, ?3, ?4, 0, ?5)
+      INSERT INTO categories (Name, Note, CategoryGroupID, BudgetID, ExcludeFromBudgetPace, Position, FundingPriority)
+      VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)
     `,
       name,
       note,
       categoryGroupId,
       budgetId,
-      position
+      position,
+      fundingPriority
     );
     return Number(result.lastInsertRowid);
   }

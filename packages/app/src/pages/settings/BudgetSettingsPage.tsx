@@ -13,6 +13,7 @@ import { useUiStore } from '@shared/store/useUiStore';
 import { cn } from '@shared/lib/utils';
 import { SettingsPageHeader } from '@pages/settings/SettingsPageHeader';
 import { IncomeCategoriesCard } from './components/IncomeCategoriesCard';
+import { GoalFundingSettingsCard } from './components/GoalFundingSettingsCard';
 
 type RtaMode = 'cumulative' | 'monthly';
 
@@ -178,6 +179,7 @@ export default function BudgetSettingsPage() {
       />
 
       <RtaModeCard />
+      <GoalFundingSettingsCard />
 
       <IncomeCategoriesCard />
 

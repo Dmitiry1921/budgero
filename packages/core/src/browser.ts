@@ -28,6 +28,7 @@ export {
   transferInvolvesOffBudgetAccount,
 } from './services/transactions/index.js';
 export { GoalService } from './services/goals/index.js';
+export * from './services/goals/funding.js';
 export { MonthlyBudgetService } from './services/monthly-budgets/index.js';
 export { AnalyticsService } from './services/analytics/index.js';
 export { RulesService } from './services/rules/index.js';

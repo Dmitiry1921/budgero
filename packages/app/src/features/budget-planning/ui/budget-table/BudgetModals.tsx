@@ -21,7 +21,11 @@ interface BudgetModalsProps {
   // Category edit modal
   modalState: CategoryModalState;
   onEditModalClose: () => void;
-  onSaveCategoryEdit: (name: string, excludeFromBudgetPace: boolean) => Promise<void>;
+  onSaveCategoryEdit: (
+    name: string,
+    excludeFromBudgetPace: boolean,
+    priority: number
+  ) => Promise<void>;
   isSavingEdit: boolean;
 
   // Delete modal
@@ -121,6 +125,8 @@ export function BudgetModals({
         <CategoryEditDialog
           open={modalState.editModalOpen}
           onClose={onEditModalClose}
+          budgetId={modalState.editingCategory.budgetId}
+          fundingPriority={modalState.editingCategory.fundingPriority}
           categoryName={modalState.editingCategory.name}
           excludeFromBudgetPace={modalState.editingCategory.excludeFromBudgetPace}
           onSave={onSaveCategoryEdit}

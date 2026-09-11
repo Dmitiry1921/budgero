@@ -5,12 +5,15 @@ import {
   GoalPurpose,
   GoalType,
   type Goal,
+  allocateGoalFunding,
+  type GoalFundingDistribution,
 } from '@budgero/core/browser';
 import { asMilli, formatMilli, sumMilli, type MilliUnits } from '@shared/lib/currency/milli';
 import { roundMilli } from '@shared/lib/currency/round-amount';
 
 // Types for calculated category data. All amounts are integer milliunits.
 export interface UnderfundedGoal {
+  priority: number;
   categoryId: number;
   categoryName: string;
   needed: MilliUnits;
@@ -113,6 +116,7 @@ export function calculateUnderfundedGoals(
       }
 
       return {
+        priority: row.FundingPriority ?? 3,
         categoryId: row.CategoryID,
         categoryName: row.Category,
         needed,
@@ -123,7 +127,7 @@ export function calculateUnderfundedGoals(
       };
     })
     .filter((g): g is UnderfundedGoal => g !== null && g.needed > 0)
-    .sort((a, b) => b.needed - a.needed);
+    .sort((a, b) => a.priority - b.priority || a.categoryId - b.categoryId);
 }
 
 export function calculateOverspentCategories(
@@ -194,7 +198,8 @@ export function calculateTotals(
 export function prepareUnderfundedAssignments(
   underfundedGoals: UnderfundedGoal[],
   readyToAssign: number,
-  budgetData: GetMonthlyBudgetRow[]
+  budgetData: GetMonthlyBudgetRow[],
+  distribution: GoalFundingDistribution = 'proportional-shortfall'
 ): {
   assignments: AssignmentSummary[];
   remaining: number;
@@ -204,10 +209,9 @@ export function prepareUnderfundedAssignments(
   const assignments: AssignmentSummary[] = [];
   const batchAssignments: { categoryId: number; amount: number }[] = [];
 
-  for (const goal of underfundedGoals) {
-    if (remaining <= 0) break;
-
-    const amountToAssign = asMilli(Math.min(goal.needed, remaining));
+  for (const allocation of allocateGoalFunding(underfundedGoals, readyToAssign, distribution)) {
+    const goal = underfundedGoals.find((item) => item.categoryId === allocation.categoryId)!;
+    const amountToAssign = asMilli(allocation.amount);
     const currentAssigned = budgetData.find((r) => r.CategoryID === goal.categoryId)?.Assigned || 0;
     const newAssignment = currentAssigned + amountToAssign;
 

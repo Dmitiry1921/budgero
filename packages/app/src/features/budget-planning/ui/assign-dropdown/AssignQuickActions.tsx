@@ -14,6 +14,7 @@ interface AssignQuickActionsProps {
   /** Ready-to-assign amount in integer milliunits. */
   readyToAssign: number;
   isAssigning: boolean;
+  fundingReady: boolean;
   underfundedGoals: UnderfundedGoal[];
   overspentCategories: OverspentCategory[];
   overfundedCategories: OverfundedCategory[];
@@ -33,6 +34,7 @@ interface AssignQuickActionsProps {
 export function AssignQuickActions({
   readyToAssign,
   isAssigning,
+  fundingReady,
   underfundedGoals,
   overspentCategories,
   overfundedCategories,
@@ -57,6 +59,7 @@ export function AssignQuickActions({
       <DropdownMenuItem
         onClick={onAutoAssignUnderfunded}
         disabled={
+          !fundingReady ||
           underfundedGoals.length === 0 ||
           (readyToAssign <= 0 && !allowOverAssignment) ||
           isAssigning
@@ -69,7 +72,7 @@ export function AssignQuickActions({
           <div className="text-xs text-muted-foreground">
             {underfundedGoals.length === 0
               ? 'All goals funded'
-              : `${underfundedGoals.length} goal${underfundedGoals.length === 1 ? '' : 's'} need ${formatMilli(globalLocalizer, asMilli(Math.min(totalUnderfunded, readyToAssign)))}`}
+              : `${underfundedGoals.length} goal${underfundedGoals.length === 1 ? '' : 's'} need ${formatMilli(globalLocalizer, asMilli(allowOverAssignment ? totalUnderfunded : Math.min(totalUnderfunded, Math.max(0, readyToAssign))))}`}
           </div>
         </div>
       </DropdownMenuItem>

@@ -9,12 +9,14 @@
  * - 'monthly': income through the selected month minus assignments through it, with prior-month
  *   cash overspending pulled out of Ready to Assign (YNAB-style).
  */
+import type { GoalFundingSettings } from '../goals/funding.js';
+
 export type RtaMode = 'cumulative' | 'monthly';
 
 /**
  * Budget type - represents a budget entity
  */
-export interface Budget {
+export interface Budget extends Partial<GoalFundingSettings> {
   ID: number;
   SpaceID: string;
   Name: string;

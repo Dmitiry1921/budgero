@@ -1,6 +1,61 @@
+import type { FundingPriorityUpdate } from '@budgero/core/browser';
 import { S, makeRestoreUndo, safeCapture, type CategoryRow, type OpCodeEntry } from '../shared';
 
 export const categoryOps = {
+  'categories.updateFundingPriorities': {
+    execute: async (args) =>
+      S().categories.updateFundingPriorities(
+        args.budgetId as number,
+        args.updates as FundingPriorityUpdate[]
+      ),
+    invalidates: [
+      ['categories', '*'],
+      ['monthlyBudget', '*'],
+    ],
+    undo: {
+      capture: async (args) =>
+        (args.updates as FundingPriorityUpdate[]).map(({ categoryId }) => ({
+          categoryId,
+          priority: S().categories.getCategory(categoryId).FundingPriority ?? 3,
+        })),
+      build: (args, _result, before) => [
+        {
+          op: 'categories.updateFundingPriorities',
+          args: { budgetId: args.budgetId, updates: before },
+        },
+      ],
+    },
+  },
+  'categories.updateDetails': {
+    execute: async (args) =>
+      S().categories.updateCategoryDetails(
+        args.budgetId as number,
+        args.id as number,
+        args.name as string,
+        args.excludeFromBudgetPace as boolean,
+        args.priority as number
+      ),
+    invalidates: [
+      ['categories', '*'],
+      ['monthlyBudget', '*'],
+    ],
+    undo: {
+      capture: async (args) => {
+        const category = S().categories.getCategory(args.id as number);
+        return {
+          name: category.Name,
+          excludeFromBudgetPace: !!category.ExcludeFromBudgetPace,
+          priority: category.FundingPriority ?? 3,
+        };
+      },
+      build: (args, _result, before) => [
+        {
+          op: 'categories.updateDetails',
+          args: { id: args.id, budgetId: args.budgetId, ...(before as Record<string, unknown>) },
+        },
+      ],
+    },
+  },
   'categoryGroups.create': {
     execute: async (args) => {
       return await S().categories!.addCategoryGroup(args.name as string, args.budgetId as number);
@@ -71,7 +126,8 @@ export const categoryOps = {
         args.parentId as number, // groupId
         args.budgetId as number,
         args.name as string,
-        args.note as string
+        args.note as string,
+        (args.fundingPriority as number | undefined) ?? 3
       );
     },
     invalidates: [
@@ -161,13 +217,20 @@ export const categoryOps = {
           return {
             name: category?.Name,
             note: category?.Note ?? '',
+            fundingPriority: category?.FundingPriority ?? 3,
             groupId: category?.CategoryGroupID,
             budgetId: category?.BudgetID,
           };
         }),
       build: (_args, _result, before) => {
         const snapshot = before as
-          | { name?: string; note?: string; groupId?: number; budgetId?: number }
+          | {
+              name?: string;
+              note?: string;
+              groupId?: number;
+              budgetId?: number;
+              fundingPriority?: number;
+            }
           | null
           | undefined;
         if (!snapshot?.name || !snapshot?.groupId || !snapshot?.budgetId) return [];
@@ -179,6 +242,7 @@ export const categoryOps = {
               budgetId: snapshot.budgetId,
               name: snapshot.name,
               note: snapshot.note ?? '',
+              fundingPriority: snapshot.fundingPriority ?? 3,
             },
           },
         ];
