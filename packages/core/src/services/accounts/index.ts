@@ -1,4 +1,5 @@
 import { DatabaseAdapter } from '../../database/interface.js';
+import { allRows } from '../../database/sql.js';
 import { asMilli, subMilli, ZERO_MILLI, type MilliUnits } from '../../money/index.js';
 import {
   Account,
@@ -56,6 +57,10 @@ export class AccountService {
   ): Promise<Account> {
     if (!name.trim()) {
       throw new Error('account name cannot be empty');
+    }
+
+    if (metadata?.cc_payment_category_id !== undefined) {
+      this.validatePaymentCategoryLink(budgetId, metadata.cc_payment_category_id);
     }
 
     // Determine default on_budget value based on account type if not explicitly set
@@ -204,13 +209,18 @@ export class AccountService {
 
     if (isCreditCard) {
       // Per-card payment category (e.g., "Chase CC"), named after the account.
-      // Reuses a same-named category already in the group (e.g. one imported
-      // from YNAB) instead of creating a duplicate.
+      // Reuses an unclaimed same-named category already in the group. Each
+      // account owns its payment category even when display names match.
       const requestedPaymentCategoryId = (metadata || {}).cc_payment_category_id;
-      if (this.categoryExistsInBudget(budgetId, requestedPaymentCategoryId)) {
+      if (requestedPaymentCategoryId !== undefined) {
         ccPaymentCategoryId = requestedPaymentCategoryId as number;
       } else {
-        ccPaymentCategoryId = this.reattachOrCreateCategory(budgetId, 'Credit Card Payments', name);
+        ccPaymentCategoryId = this.reattachOrCreateCategory(
+          budgetId,
+          'Credit Card Payments',
+          name,
+          accountId
+        );
       }
 
       const updatedMetadata = {
@@ -338,6 +348,16 @@ export class AccountService {
 
     const nameChanged = finalName !== originalAccount.Name;
 
+    // Validate caller-supplied links before currency conversion or any database
+    // writes. Metadata omitted by an edit form still preserves the stored link.
+    if (metadata?.cc_payment_category_id !== undefined) {
+      this.validatePaymentCategoryLink(
+        originalAccount.BudgetID,
+        metadata.cc_payment_category_id,
+        id
+      );
+    }
+
     if (finalCurrency !== originalAccount.Currency) {
       // Handle currency change before updating
       await this.currencyService.handleAccountCurrencyChange(
@@ -362,7 +382,12 @@ export class AccountService {
     // edit form rebuilds metadata from its own fields and would otherwise
     // silently drop the category links, decoupling the account from its
     // CC Payment / linked category forever.
-    const SYSTEM_METADATA_KEYS = ['cc_payment_category_id', 'linked_category_id'] as const;
+    const SYSTEM_METADATA_KEYS = [
+      'cc_payment_category_id',
+      'linked_category_id',
+      'ynab_account_id',
+      'ynab_credit_payment_category_id',
+    ] as const;
     let persistedMetadata: Record<string, unknown> | undefined;
     if (metadata !== undefined) {
       persistedMetadata = { ...metadata };
@@ -394,14 +419,15 @@ export class AccountService {
       // (also recreates a link that points at a since-deleted category).
       if (
         isCreditAccountType(newType) &&
-        !this.categoryExistsInBudget(budgetId, effectiveMetadata.cc_payment_category_id)
+        !this.isCreditPaymentCategory(budgetId, effectiveMetadata.cc_payment_category_id)
       ) {
         effectiveMetadata = {
           ...effectiveMetadata,
           cc_payment_category_id: this.reattachOrCreateCategory(
             budgetId,
             'Credit Card Payments',
-            finalName
+            finalName,
+            id
           ),
         };
         this.queries.updateAccountMetadata(id, JSON.stringify(effectiveMetadata));
@@ -430,8 +456,11 @@ export class AccountService {
       }
 
       const ccPaymentCategoryId = effectiveMetadata.cc_payment_category_id;
-      if (typeof ccPaymentCategoryId === 'number') {
-        this.categoryService.updateCategoryName(ccPaymentCategoryId, finalName);
+      if (
+        this.isCreditPaymentCategory(originalAccount.BudgetID, ccPaymentCategoryId) &&
+        !this.paymentCategoryClaimedByAnotherAccount(ccPaymentCategoryId as number, id)
+      ) {
+        this.categoryService.updateCategoryName(ccPaymentCategoryId as number, finalName);
       }
 
       this.transactionService.updateTransferMemosForAccountRename(
@@ -465,7 +494,8 @@ export class AccountService {
     raw: string | Record<string, unknown> | undefined
   ): Record<string, unknown> {
     try {
-      return typeof raw === 'string' ? JSON.parse(raw || '{}') : { ...(raw || {}) };
+      const parsed = typeof raw === 'string' ? JSON.parse(raw || '{}') : raw;
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? { ...parsed } : {};
     } catch {
       return {};
     }
@@ -479,15 +509,62 @@ export class AccountService {
     );
   }
 
+  private isCreditPaymentCategory(budgetId: number, categoryId: unknown): boolean {
+    if (typeof categoryId !== 'number') return false;
+    const category = this.categoryService
+      .getAllCategories(budgetId)
+      .find((candidate) => candidate.ID === categoryId);
+    return Boolean(
+      category &&
+        this.categoryService
+          .getAllCategoryGroups(budgetId)
+          .some(
+            (group) =>
+              group.ID === category.CategoryGroupID && group.Name === 'Credit Card Payments'
+          )
+    );
+  }
+
+  private paymentCategoryClaimedByAnotherAccount(categoryId: number, accountId?: number): boolean {
+    // Archived accounts and accounts temporarily changed to another type retain
+    // their category ownership. Include every account, even malformed links from
+    // another budget, so one account cannot alter another account's category.
+    return allRows<Pick<Account, 'ID' | 'Metadata'>>(
+      this.db,
+      'SELECT ID, Metadata FROM accounts'
+    ).some(
+      (account) =>
+        account.ID !== accountId &&
+        this.parseAccountMetadata(account.Metadata).cc_payment_category_id === categoryId
+    );
+  }
+
+  private validatePaymentCategoryLink(
+    budgetId: number,
+    categoryId: unknown,
+    accountId?: number
+  ): void {
+    if (!this.isCreditPaymentCategory(budgetId, categoryId)) {
+      throw new Error(
+        'Credit card payment category must belong to this budget’s Credit Card Payments group.'
+      );
+    }
+    if (this.paymentCategoryClaimedByAnotherAccount(categoryId as number, accountId)) {
+      throw new Error('Credit card payment category is already linked to another account.');
+    }
+  }
+
   /**
    * Reattach-or-create: prefer an existing same-named category in the target
    * group (recovers accounts whose metadata link was lost) before creating a
-   * fresh one. Creates the group too if missing.
+   * fresh one. Payment categories already claimed by other accounts are never
+   * reused. Creates the group too if missing.
    */
   private reattachOrCreateCategory(
     budgetId: number,
     groupName: string,
-    categoryName: string
+    categoryName: string,
+    accountId?: number
   ): number {
     const group = this.categoryService.getCategoryGroupByName(groupName, budgetId);
     let groupId = group?.ID;
@@ -496,7 +573,13 @@ export class AccountService {
     } else {
       const existing = this.categoryService
         .getAllCategories(budgetId)
-        .find((c) => c.CategoryGroupID === groupId && c.Name === categoryName);
+        .find(
+          (c) =>
+            c.CategoryGroupID === groupId &&
+            c.Name === categoryName &&
+            (groupName !== 'Credit Card Payments' ||
+              !this.paymentCategoryClaimedByAnotherAccount(c.ID, accountId))
+        );
       if (existing) return existing.ID;
     }
     return this.categoryService.addCategory(groupId, budgetId, categoryName, '');
@@ -516,12 +599,13 @@ export class AccountService {
 
     if (
       isCreditAccountType(account.Type) &&
-      !this.categoryExistsInBudget(budgetId, metadata.cc_payment_category_id)
+      !this.isCreditPaymentCategory(budgetId, metadata.cc_payment_category_id)
     ) {
       metadata.cc_payment_category_id = this.reattachOrCreateCategory(
         budgetId,
         'Credit Card Payments',
-        account.Name
+        account.Name,
+        account.ID
       );
       changed = true;
     }
@@ -619,13 +703,18 @@ export class AccountService {
     }
 
     // Delete the CC Payment category if it exists (for credit cards)
-    if (ccPaymentCategoryId) {
+    if (
+      ccPaymentCategoryId &&
+      budgetId &&
+      this.isCreditPaymentCategory(budgetId, ccPaymentCategoryId) &&
+      !this.paymentCategoryClaimedByAnotherAccount(ccPaymentCategoryId)
+    ) {
       try {
         this.categoryService.deleteCategory(ccPaymentCategoryId);
       } catch {
         // Category may have already been deleted or doesn't exist
       }
-    } else if (isCreditCard && accountName && budgetId) {
+    } else if (!ccPaymentCategoryId && isCreditCard && accountName && budgetId) {
       // Fallback: Try to find and delete a category with the same name in Credit Card Payments group
       try {
         const ccPaymentsGroup = this.categoryService.getCategoryGroupByName(
@@ -634,7 +723,11 @@ export class AccountService {
         );
         if (ccPaymentsGroup) {
           const category = this.categoryService.getCategoryByName(accountName, budgetId);
-          if (category && category.CategoryGroupID === ccPaymentsGroup.ID) {
+          if (
+            category &&
+            category.CategoryGroupID === ccPaymentsGroup.ID &&
+            !this.paymentCategoryClaimedByAnotherAccount(category.ID)
+          ) {
             this.categoryService.deleteCategory(category.ID);
           }
         }
