@@ -114,6 +114,16 @@ export function DesktopTransactionTable({
     endIndex,
   } = useVirtualizedTransactionRows(transactions);
 
+  // Opening an editor can itself trigger a browser scroll adjustment. Keep it
+  // open while its row is rendered, but forget it once virtualization removes
+  // the row so scrolling back cannot reopen an abandoned editor.
+  if (
+    editingCell &&
+    !visibleItems.some((transaction) => transaction.ID === editingCell.transactionId)
+  ) {
+    setEditingCell(null);
+  }
+
   useEffect(() => {
     if (!canLoadMore || isLoadingMore || endIndex < transactions.length - 20) return;
     void onLoadMore?.();
@@ -140,14 +150,6 @@ export function DesktopTransactionTable({
       onSelectionChange(transactionIds[0], checked, transactionIds);
     },
     [onSelectionChange, transactionIds]
-  );
-
-  const handleViewportScroll = useCallback<React.UIEventHandler<HTMLDivElement>>(
-    (event) => {
-      handleDeactivateCell();
-      handleScroll(event);
-    },
-    [handleDeactivateCell, handleScroll]
   );
 
   useEffect(() => {
@@ -200,7 +202,7 @@ export function DesktopTransactionTable({
           <Table
             containerRef={viewportRef}
             containerClassName="max-h-[70vh] overflow-auto overscroll-contain"
-            containerProps={{ onScroll: handleViewportScroll }}
+            containerProps={{ onScroll: handleScroll }}
             style={{ minWidth: totalWidth, tableLayout: 'fixed' }}
           >
             <TransactionTableHeader
