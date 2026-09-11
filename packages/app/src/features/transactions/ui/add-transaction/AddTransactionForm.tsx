@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import { ManualRatePrompt } from '@features/currencies/ui/ManualRatePrompt';
 import { saveManualRate } from '@entities/currency/lib/currency-utils';
 import { toastError } from '@shared/lib/errors';
+import { useActiveSpaceId } from '@shared/runtime/runtime-provider';
 import { Card, CardContent } from '@shared/ui/card';
 import { Button } from '@shared/ui/button';
 import { DialogHeader, DialogTitle, DialogDescription } from '@shared/ui/dialog';
@@ -68,7 +69,13 @@ export interface AddTransactionFormProps {
   recurring?: AddTransactionRecurringOptions;
 }
 
-export function AddTransactionForm({
+export function AddTransactionForm(props: AddTransactionFormProps) {
+  const spaceId = useActiveSpaceId();
+  // Reset all form, split, and autofill state when its owning budget changes.
+  return <BudgetTransactionForm key={JSON.stringify([spaceId, props.budgetId])} {...props} />;
+}
+
+function BudgetTransactionForm({
   budgetId,
   selectedAccountId,
   onAddTransaction,

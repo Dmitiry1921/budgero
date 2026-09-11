@@ -113,7 +113,6 @@ type TransactionFormAction =
   | { type: 'RESET_FORM' }
   | { type: 'RESET_AMOUNT' };
 
-const LAST_USED_KEY = 'budgero:add-transaction:last-used';
 const REMEMBER_LAST_KEY = 'budgero:add-transaction:remember-last';
 
 export function mergeLastUsedFields(base: LastUsedFields, fields: LastUsedFields): LastUsedFields {
@@ -278,13 +277,14 @@ function transactionFormReducer(
 }
 
 interface UseTransactionFormOptions {
+  lastUsedStorageKey: string | null;
   selectedAccountId?: number;
   initialValues?: TransactionFormInitialValues;
   disableLastUsed?: boolean;
 }
 
-export function useTransactionForm(options: UseTransactionFormOptions = {}) {
-  const { selectedAccountId, initialValues, disableLastUsed = false } = options;
+export function useTransactionForm(options: UseTransactionFormOptions) {
+  const { lastUsedStorageKey, selectedAccountId, initialValues, disableLastUsed = false } = options;
 
   const [state, dispatch] = useReducer(
     transactionFormReducer,
@@ -308,16 +308,11 @@ export function useTransactionForm(options: UseTransactionFormOptions = {}) {
     if (typeof window === 'undefined') return;
 
     try {
-      const saved = localStorage.getItem(LAST_USED_KEY);
+      // Do not migrate the old global key: it has no reliable space/budget identity.
+      const saved = lastUsedStorageKey ? localStorage.getItem(lastUsedStorageKey) : null;
       if (saved) {
         const parsed = JSON.parse(saved) as LastUsedState;
         dispatch({ type: 'SET_LAST_USED', lastUsed: { ...state.lastUsed, ...parsed } });
-
-        // Seed account from last used if nothing preselected
-        const lastAccount = parsed[state.transactionType]?.accountId;
-        if (!state.selectedFromAccount && lastAccount) {
-          dispatch({ type: 'SET_FROM_ACCOUNT', accountId: lastAccount });
-        }
       }
 
       const savedRemember = localStorage.getItem(REMEMBER_LAST_KEY);
@@ -327,7 +322,7 @@ export function useTransactionForm(options: UseTransactionFormOptions = {}) {
     } catch (e) {
       console.warn('Failed to load last-used transaction defaults', e);
     }
-  }, [disableLastUsed, state.lastUsed, state.transactionType, state.selectedFromAccount]);
+  }, [disableLastUsed, lastUsedStorageKey, state.lastUsed]);
 
   const setTransactionType = useCallback((value: TransactionType) => {
     dispatch({ type: 'SET_TRANSACTION_TYPE', value });
@@ -394,17 +389,17 @@ export function useTransactionForm(options: UseTransactionFormOptions = {}) {
 
   const persistLastUsed = useCallback(
     (transactionType: TransactionType, fields: LastUsedFields) => {
-      if (!state.rememberLast) return;
+      if (disableLastUsed || !state.rememberLast || !lastUsedStorageKey) return;
 
       dispatch({ type: 'UPDATE_LAST_USED', transactionType, fields });
 
       if (typeof window !== 'undefined') {
         const nextEntry = mergeLastUsedFields(state.lastUsed[transactionType], fields);
         const next = { ...state.lastUsed, [transactionType]: nextEntry };
-        localStorage.setItem(LAST_USED_KEY, JSON.stringify(next));
+        localStorage.setItem(lastUsedStorageKey, JSON.stringify(next));
       }
     },
-    [state.rememberLast, state.lastUsed]
+    [disableLastUsed, lastUsedStorageKey, state.rememberLast, state.lastUsed]
   );
 
   const setAddAccountOpen = useCallback((open: boolean) => {

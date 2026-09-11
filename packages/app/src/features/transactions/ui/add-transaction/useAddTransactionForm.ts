@@ -9,6 +9,8 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { useConnectivity } from '@shared/hooks/useConnectivity';
+import { useActiveSpaceId } from '@shared/runtime/runtime-provider';
+import { getLastUsedTransactionStorageKey } from '@features/transactions/lib/last-used-storage';
 import {
   useTransactionForm,
   type TransactionFormInitialValues,
@@ -16,6 +18,7 @@ import {
 import { getExchangeRate, getLocalOrManualRate } from '@entities/currency/lib/currency-utils';
 import { buildCurrencyLocalizer, useUiStore } from '@shared/store/useUiStore';
 import { useCategories } from '@entities/category/api/useCategories';
+import { useLabels } from '@entities/label/api/useLabels';
 import { useDeleteTransaction, useUpsertSplits } from '@entities/transaction/api/useTransactions';
 import { useActiveAccounts } from '@entities/account/api/useActiveAccounts';
 import {
@@ -80,7 +83,13 @@ export function useAddTransactionForm({
 }: UseAddTransactionFormOptions) {
   const upsertSplits = useUpsertSplits();
   const deleteTransaction = useDeleteTransaction();
-  const form = useTransactionForm({ selectedAccountId, initialValues, disableLastUsed });
+  const spaceId = useActiveSpaceId();
+  const form = useTransactionForm({
+    lastUsedStorageKey: getLastUsedTransactionStorageKey(spaceId, budgetId),
+    selectedAccountId,
+    initialValues,
+    disableLastUsed,
+  });
 
   // Destructure setters for use in effects (stable references)
   const {
@@ -104,6 +113,7 @@ export function useAddTransactionForm({
   const [receivedAmount, setReceivedAmount] = React.useState<number | null>(null);
 
   const { data: categories = [], isLoading: categoriesLoading } = useCategories(budgetId);
+  const { labels, isSuccess: labelsLoaded } = useLabels(budgetId);
   // Hide archived accounts from the add-transaction picker; they remain visible in history.
   const { data: accounts, isLoading: accountsLoading } = useActiveAccounts(budgetId);
 
@@ -184,6 +194,7 @@ export function useAddTransactionForm({
       previousTransactionType.current = form.transactionType;
       return;
     }
+    if (!labelsLoaded || categoriesLoading || accountsLoading) return;
 
     const lu = form.lastUsed[form.transactionType] || {};
 
@@ -196,18 +207,19 @@ export function useAddTransactionForm({
       return;
     }
 
-    // Only mark as prefilled if there's actually data to prefill
-    // This ensures we re-run when localStorage loads
-    if (lu.payee || lu.category || lu.accountId) {
-      lastPrefillKey.current = currentPrefillKey;
-    }
+    lastPrefillKey.current = currentPrefillKey;
 
     if (lu.payee) setPayee(lu.payee);
-    if (!form.isTransfer && !isSplit && lu.category) {
+    if (
+      !form.isTransfer &&
+      !isSplit &&
+      lu.category &&
+      categories.some((cat) => cat.Name === lu.category)
+    ) {
       setCategory(lu.category);
     }
     if (typeof lu.labelId === 'number') {
-      setLabelId(lu.labelId);
+      setLabelId(labels.some((label) => label.ID === lu.labelId) ? lu.labelId : null);
     } else if (lu.labelId === null) {
       // Remembered "No label" — restore it explicitly so a stale label can't linger.
       setLabelId(null);
@@ -215,7 +227,9 @@ export function useAddTransactionForm({
     const lastAccount = lu.accountId;
     const previousAccount = form.lastUsed[previousTransactionType.current]?.accountId;
     const shouldApplyLastAccount =
-      lastAccount && (!form.selectedFromAccount || form.selectedFromAccount === previousAccount);
+      lastAccount &&
+      accounts.some((account) => account.ID.toString() === lastAccount) &&
+      (!form.selectedFromAccount || form.selectedFromAccount === previousAccount);
     if (shouldApplyLastAccount) {
       setFromAccount(lastAccount);
     }
@@ -232,7 +246,25 @@ export function useAddTransactionForm({
     setLabelId,
     setFromAccount,
     previousTransactionType,
+    accounts,
+    accountsLoading,
+    categories,
+    categoriesLoading,
+    labels,
+    labelsLoaded,
   ]);
+
+  // A remembered label may also have been deleted since the previous transaction.
+  // Wait for the directory before deciding an ID is stale.
+  React.useEffect(() => {
+    if (
+      labelsLoaded &&
+      form.selectedLabelId !== null &&
+      !labels.some((label) => label.ID === form.selectedLabelId)
+    ) {
+      setLabelId(null);
+    }
+  }, [form.selectedLabelId, labels, labelsLoaded, setLabelId]);
 
   React.useEffect(() => {
     if (form.isInflow) {
@@ -388,6 +420,10 @@ export function useAddTransactionForm({
 
   const handleSubmit = React.useCallback(
     async (addAnother = false) => {
+      if (form.selectedLabelId !== null && !labelsLoaded) return;
+      const labelId = labels.some((label) => label.ID === form.selectedLabelId)
+        ? form.selectedLabelId
+        : null;
       const validation = validateTransaction({
         selectedFromAccount: form.selectedFromAccount,
         selectedToAccount: form.selectedToAccount,
@@ -491,7 +527,7 @@ export function useAddTransactionForm({
               date: form.transactionDate,
               transferId,
               memo: transferMemo,
-              labelId: form.selectedLabelId,
+              labelId,
               source: {
                 category: sourceCategory,
                 payee: sourcePayee ?? '',
@@ -512,7 +548,7 @@ export function useAddTransactionForm({
             form.persistLastUsed('transfer', {
               payee: transferInvolvesOffBudget ? form.payee : '',
               accountId: form.selectedFromAccount,
-              labelId: form.selectedLabelId,
+              labelId,
             });
 
             if (addAnother) {
@@ -545,7 +581,7 @@ export function useAddTransactionForm({
                 category: finalCategory,
                 memo: form.memo,
                 payee: form.payee,
-                labelId: form.selectedLabelId,
+                labelId,
                 outflow,
                 inflow,
                 accountId: parseInt(form.selectedFromAccount),
@@ -565,7 +601,7 @@ export function useAddTransactionForm({
           outflow,
           inflow,
           parseInt(form.selectedFromAccount),
-          form.selectedLabelId,
+          labelId,
           null,
           addAnother
         );
@@ -576,7 +612,7 @@ export function useAddTransactionForm({
           category: !form.isTransfer ? finalCategory : undefined,
           payee: form.payee,
           accountId: form.selectedFromAccount,
-          labelId: form.selectedLabelId,
+          labelId,
         });
 
         if (addAnother) {
@@ -644,7 +680,7 @@ export function useAddTransactionForm({
           outflow,
           inflow,
           accountId,
-          form.selectedLabelId,
+          labelId,
           null,
           true
         );
@@ -662,7 +698,7 @@ export function useAddTransactionForm({
           payee: form.payee,
           category: !form.isTransfer && form.selectedCategory ? form.selectedCategory : undefined,
           accountId: form.selectedFromAccount,
-          labelId: form.selectedLabelId,
+          labelId,
         });
 
         if (addAnother) {
@@ -704,6 +740,8 @@ export function useAddTransactionForm({
       resetFormFields,
       logAutofillApplications,
       autofillAppliedSuggestions,
+      labels,
+      labelsLoaded,
       transferInvolvesOffBudget,
       receivedAmount,
       onCancel,
@@ -716,7 +754,10 @@ export function useAddTransactionForm({
 
   return {
     // Base form state and actions
-    form,
+    form: {
+      ...form,
+      canSubmit: form.canSubmit && (form.selectedLabelId === null || labelsLoaded),
+    },
 
     // Split state
     isSplit,

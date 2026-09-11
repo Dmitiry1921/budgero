@@ -19,6 +19,11 @@ import { Dialog, DialogTrigger, DialogContent } from '@shared/ui/dialog';
 import { AddTransactionForm } from '@features/transactions/ui/add-transaction';
 import { useAccounts } from '@entities/account/api/useAccounts';
 import { useUiStore } from '@shared/store/useUiStore';
+import { useActiveSpaceId } from '@shared/runtime/runtime-provider';
+import {
+  getLastUsedTransactionStorageKey,
+  readLastUsedAccountId,
+} from '@features/transactions/lib/last-used-storage';
 import { useAddTransactionHandler } from '@features/transactions/api/useAddTransactionHandler';
 import { IS_SELF_HOSTABLE_BUILD } from '@shared/lib/env';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -45,11 +50,11 @@ import {
   NAV_SETTINGS_PREFERENCES,
 } from '@shared/model/nav-registry';
 
-const LAST_USED_KEY = 'budgero:add-transaction:last-used';
-
 export function MobileBottomNav() {
   const location = useLocation();
   const selectedBudget = useUiStore((state) => state.selectedBudget);
+  const spaceId = useActiveSpaceId();
+  const lastUsedStorageKey = getLastUsedTransactionStorageKey(spaceId, selectedBudget?.ID);
   const { data: accountsData = [] } = useAccounts(selectedBudget?.ID || 0);
   const { data: uncategorizedData } = useUncategorizedTransactions(selectedBudget?.ID || 0);
   const [addTransactionOpen, setAddTransactionOpen] = useState(false);
@@ -79,20 +84,12 @@ export function MobileBottomNav() {
     setOpenSettingsSections((prev) => ({ ...prev, [section]: !prev[section] }));
   };
 
-  const [lastUsedAccountId, setLastUsedAccountId] = useState<number | undefined>(() => {
-    if (typeof window === 'undefined') return undefined;
-    try {
-      const raw = window.localStorage.getItem(LAST_USED_KEY);
-      if (!raw) return undefined;
-      const parsed = JSON.parse(raw);
-      const candidate =
-        parsed?.outflow?.accountId || parsed?.inflow?.accountId || parsed?.transfer?.accountId;
-      const numeric = Number(candidate);
-      return !Number.isNaN(numeric) ? numeric : undefined;
-    } catch {
-      return undefined;
-    }
-  });
+  const [rememberedAccount, setRememberedAccount] = useState(() => ({
+    storageKey: lastUsedStorageKey,
+    accountId: readLastUsedAccountId(lastUsedStorageKey),
+  }));
+  const lastUsedAccountId =
+    rememberedAccount.storageKey === lastUsedStorageKey ? rememberedAccount.accountId : undefined;
 
   const logout = useLogout();
 
@@ -153,28 +150,14 @@ export function MobileBottomNav() {
     setOpenDropdown(null);
   }, [location.pathname]);
 
-  // Reload last-used account when transaction dialog opens
-  const prevAddTransactionOpenRef = useRef(addTransactionOpen);
+  // Refresh when the dialog opens or its owning space/budget changes.
   useEffect(() => {
-    if (addTransactionOpen && !prevAddTransactionOpenRef.current) {
-      try {
-        const raw = window.localStorage.getItem(LAST_USED_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          const candidate =
-            parsed?.outflow?.accountId || parsed?.inflow?.accountId || parsed?.transfer?.accountId;
-          const numeric = Number(candidate);
-          if (!Number.isNaN(numeric) && numeric !== lastUsedAccountId) {
-            // eslint-disable-next-line react-compiler/react-compiler
-            setLastUsedAccountId(numeric);
-          }
-        }
-      } catch {
-        // Ignore errors
-      }
-    }
-    prevAddTransactionOpenRef.current = addTransactionOpen;
-  }, [addTransactionOpen, lastUsedAccountId]);
+    // eslint-disable-next-line react-compiler/react-compiler
+    setRememberedAccount({
+      storageKey: lastUsedStorageKey,
+      accountId: readLastUsedAccountId(lastUsedStorageKey),
+    });
+  }, [addTransactionOpen, lastUsedStorageKey]);
 
   // Ensure we have arrays even if data is null/undefined; hide archived accounts from nav.
   const safeAccountsData = (accountsData || []).filter((a) => !a.Archived);
