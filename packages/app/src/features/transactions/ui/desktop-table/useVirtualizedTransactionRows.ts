@@ -9,6 +9,7 @@ export function useVirtualizedTransactionRows<T>(items: T[]) {
   const animationFrameRef = React.useRef<number | null>(null);
   const [scrollTop, setScrollTop] = React.useState(0);
   const [viewportHeight, setViewportHeight] = React.useState(DEFAULT_VIEWPORT_HEIGHT);
+  const hasItems = items.length > 0;
 
   React.useLayoutEffect(() => {
     const viewport = viewportRef.current;
@@ -18,7 +19,7 @@ export function useVirtualizedTransactionRows<T>(items: T[]) {
     const observer = new ResizeObserver(updateHeight);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, []);
+  }, [hasItems]);
 
   React.useEffect(
     () => () => {

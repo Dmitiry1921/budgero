@@ -10,6 +10,7 @@ import type {
   TransactionEditorDirectories,
 } from './transaction-editor-types';
 import { useVirtualizedTransactionRows } from './useVirtualizedTransactionRows';
+import { useTransactionViewportHeight } from './useTransactionViewportHeight';
 
 export interface DesktopTransactionTableProps {
   transactions: GetTransactionsByAccountRow[];
@@ -114,6 +115,8 @@ export function DesktopTransactionTable({
     endIndex,
   } = useVirtualizedTransactionRows(transactions);
 
+  useTransactionViewportHeight(viewportRef, transactions.length > 0);
+
   // Opening an editor can itself trigger a browser scroll adjustment. Keep it
   // open while its row is rendered, but forget it once virtualization removes
   // the row so scrolling back cannot reopen an abandoned editor.
@@ -201,7 +204,7 @@ export function DesktopTransactionTable({
         <div className="overflow-hidden rounded-md border bg-background">
           <Table
             containerRef={viewportRef}
-            containerClassName="max-h-[70vh] overflow-auto overscroll-contain"
+            containerClassName="overflow-auto overscroll-contain"
             containerProps={{ onScroll: handleScroll }}
             style={{ minWidth: totalWidth, tableLayout: 'fixed' }}
           >
