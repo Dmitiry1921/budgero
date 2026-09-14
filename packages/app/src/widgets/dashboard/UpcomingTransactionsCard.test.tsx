@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { format, addDays, addMonths } from 'date-fns';
+import { useUiStore } from '@shared/store/useUiStore';
 import { UpcomingTransactionsCard } from './UpcomingTransactionsCard';
 
 const mockNavigate = vi.fn();
@@ -29,9 +30,10 @@ vi.mock('@entities/transaction/api/queries', () => ({
   }),
 }));
 
+const mockAccounts = vi.fn(() => [{ ID: 1, Name: 'Checking', Currency: 'USD' }]);
 vi.mock('@entities/account/api/useAccounts', () => ({
   useAccounts: () => ({
-    data: [{ ID: 1, Name: 'Checking' }],
+    data: mockAccounts(),
   }),
 }));
 
@@ -97,6 +99,46 @@ describe('UpcomingTransactionsCard', () => {
     mockNavigate.mockReset();
     mockOccurrences.mockReturnValue([]);
     mockTransactions.mockReturnValue([]);
+    mockAccounts.mockReturnValue([{ ID: 1, Name: 'Checking', Currency: 'USD' }]);
+    useUiStore.setState({
+      selectedBudget: {
+        ID: 1,
+        SpaceID: 'test-space',
+        Name: 'Test budget',
+        DisplayCurrency: 'USD',
+        BadgeIcon: '',
+        NumberFormat: '$1,096.56',
+        RtaMode: 'cumulative',
+      },
+    });
+  });
+
+  it('formats recurring amounts in the linked account currency', () => {
+    const in5 = format(addDays(new Date(), 5), 'yyyy-MM-dd');
+    mockAccounts.mockReturnValue([{ ID: 1, Name: 'Foreign account', Currency: 'EUR' }]);
+    mockOccurrences.mockReturnValue([makeOccurrence(1, 10, in5)]);
+
+    render(<UpcomingTransactionsCard budgetId={1} globalLocalizer={globalLocalizer} />);
+
+    expect(screen.getByText(/€100\.00/)).toBeInTheDocument();
+    expect(screen.queryByText(/\$100\.00/)).not.toBeInTheDocument();
+  });
+
+  it('uses native and converted amounts for scheduled one-off transactions', () => {
+    const in10 = format(addDays(new Date(), 10), 'yyyy-MM-dd');
+    mockAccounts.mockReturnValue([{ ID: 1, Name: 'Foreign account', Currency: 'EUR' }]);
+    mockTransactions.mockReturnValue([
+      makeTransaction(1, in10, {
+        Account: 'Foreign account',
+        OutflowNative: 100_000,
+        OutflowConverted: 200_000,
+      }),
+    ]);
+
+    render(<UpcomingTransactionsCard budgetId={1} globalLocalizer={globalLocalizer} />);
+
+    expect(screen.getByText(/€100\.00/)).toBeInTheDocument();
+    expect(screen.getByText(/≈ \$200\.00/)).toBeInTheDocument();
   });
 
   it('navigates to recurring settings when clicking Manage automations', async () => {

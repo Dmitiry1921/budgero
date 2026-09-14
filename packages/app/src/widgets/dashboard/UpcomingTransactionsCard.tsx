@@ -24,7 +24,7 @@ import { type TransactionColumnName as DbTransactionColumn } from '@entities/tra
 import { useTransactionCellCommit } from '@features/transactions/api/useTransactionCellCommit';
 import { useAccounts } from '@entities/account/api/useAccounts';
 import type { GetTransactionsByAccountRow } from '@budgero/core/browser';
-import { useUiStore } from '@shared/store/useUiStore';
+import { buildCurrencyLocalizer, useUiStore } from '@shared/store/useUiStore';
 import { formatMaskedMilli } from '@shared/lib/privacy/mask-numbers';
 
 type UpcomingTransactionsCardProps = {
@@ -43,9 +43,11 @@ type UpcomingItem = {
   name: string;
   date: Date;
   amount: number;
+  budgetAmount: number | null;
   isOutflow: boolean;
   accountId: number | null;
   accountName: string;
+  accountCurrency: string | null;
   memo: string | null;
   isRecurring: boolean;
   badgeLabel: string;
@@ -67,6 +69,7 @@ export function UpcomingTransactionsCard({
 }: UpcomingTransactionsCardProps) {
   const navigate = useNavigate();
   const privacyMaskNumbers = useUiStore((state) => state.privacyMaskNumbers);
+  const selectedBudget = useUiStore((state) => state.selectedBudget);
   const today = useMemo(() => new Date(), []);
   const fromDate = format(today, 'yyyy-MM-dd');
   const recurringToDate = format(addMonths(today, RECURRING_LOOKAHEAD_MONTHS), 'yyyy-MM-dd');
@@ -87,9 +90,25 @@ export function UpcomingTransactionsCard({
   const accountById = useMemo(() => {
     return new Map(accounts.map((account) => [account.ID, account.Name]));
   }, [accounts]);
+  const accountByIdMap = useMemo(() => {
+    return new Map(accounts.map((account) => [account.ID, account]));
+  }, [accounts]);
+  const accountLocalizersById = useMemo(() => {
+    const map = new Map<number, Intl.NumberFormat>();
+    for (const account of accounts) {
+      const localizer = buildCurrencyLocalizer(
+        account.Currency,
+        selectedBudget?.NumberFormat ?? ''
+      );
+      if (localizer) map.set(account.ID, localizer);
+    }
+    return map;
+  }, [accounts, selectedBudget?.NumberFormat]);
   const accountIdByName = useMemo(() => {
     return new Map(accounts.map((account) => [account.Name, account.ID]));
   }, [accounts]);
+  const budgetCurrency =
+    selectedBudget?.DisplayCurrency ?? globalLocalizer.resolvedOptions().currency;
 
   // Quick-edit dialog state for one-off scheduled transactions
   const [quickViewTx, setQuickViewTx] = useState<GetTransactionsByAccountRow | null>(null);
@@ -162,9 +181,11 @@ export function UpcomingTransactionsCard({
           name: template.name,
           date: parseISO(occurrence.dueDate),
           amount: Math.abs(template.amount),
+          budgetAmount: template.budgetAmount != null ? Math.abs(template.budgetAmount) : null,
           isOutflow: template.direction === 'outflow',
           accountId: template.accountId,
           accountName: accountById.get(template.accountId) ?? 'Unknown account',
+          accountCurrency: accountByIdMap.get(template.accountId)?.Currency ?? null,
           memo: template.memo || null,
           isRecurring: true,
           badgeLabel: occurrence.status === 'ready' ? 'Ready to post' : 'Recurring',
@@ -186,14 +207,19 @@ export function UpcomingTransactionsCard({
       .filter((tx) => !tx.TransferID || (tx.OutflowConverted ?? 0) > 0)
       .map((tx) => {
         const isOutflow = (tx.OutflowConverted ?? 0) > 0;
+        const accountId = tx.AccountID ?? accountIdByName.get(tx.Account ?? '') ?? null;
+        const nativeAmount = isOutflow ? tx.OutflowNative : tx.InflowNative;
+        const convertedAmount = isOutflow ? tx.OutflowConverted : tx.InflowConverted;
         return {
           key: `transaction-${tx.ID}`,
           name: tx.Payee || tx.Memo || tx.Category || 'Scheduled transaction',
           date: parseISO(tx.Date),
-          amount: Math.abs(isOutflow ? (tx.OutflowConverted ?? 0) : (tx.InflowConverted ?? 0)),
+          amount: Math.abs(nativeAmount ?? convertedAmount ?? 0),
+          budgetAmount: Math.abs(convertedAmount ?? 0),
           isOutflow,
-          accountId: accountIdByName.get(tx.Account ?? '') ?? null,
+          accountId,
           accountName: tx.Account ?? 'Unknown account',
+          accountCurrency: accountId ? (accountByIdMap.get(accountId)?.Currency ?? null) : null,
           memo: tx.Payee && tx.Memo ? tx.Memo : null,
           isRecurring: false,
           badgeLabel: 'Scheduled',
@@ -205,12 +231,32 @@ export function UpcomingTransactionsCard({
     return [...recurringItems, ...oneOffItems]
       .sort((a, b) => a.date.getTime() - b.date.getTime())
       .slice(0, MAX_ITEMS);
-  }, [occurrences, transactions, accountById, accountIdByName, today, oneOffHorizon]);
+  }, [
+    occurrences,
+    transactions,
+    accountById,
+    accountByIdMap,
+    accountIdByName,
+    today,
+    oneOffHorizon,
+  ]);
 
   const isLoading = occurrencesLoading || transactionsLoading;
 
   const renderItem = (item: UpcomingItem) => {
-    const formattedAmount = formatMaskedMilli(globalLocalizer, item.amount, privacyMaskNumbers);
+    const accountLocalizer = item.accountId ? accountLocalizersById.get(item.accountId) : undefined;
+    const formattedAmount = formatMaskedMilli(
+      accountLocalizer ?? globalLocalizer,
+      item.amount,
+      privacyMaskNumbers
+    );
+    const formattedBudgetAmount =
+      item.budgetAmount != null &&
+      item.accountCurrency &&
+      budgetCurrency &&
+      item.accountCurrency !== budgetCurrency
+        ? formatMaskedMilli(globalLocalizer, item.budgetAmount, privacyMaskNumbers)
+        : null;
     const daysUntil = differenceInCalendarDays(item.date, today);
     const accentClass = item.isOutflow ? 'text-red-600 dark:text-red-300' : 'text-green-600';
     const Icon = item.isRecurring ? Repeat : CalendarClock;
@@ -251,6 +297,9 @@ export function UpcomingTransactionsCard({
                 {item.isOutflow ? '−' : '+'}
                 {formattedAmount}
               </span>
+              {formattedBudgetAmount ? (
+                <span className="text-[11px] text-muted-foreground">≈ {formattedBudgetAmount}</span>
+              ) : null}
               <Badge variant={item.badgeVariant}>{item.badgeLabel}</Badge>
               <span className="text-[11px] text-muted-foreground">
                 {daysUntil <= 0
