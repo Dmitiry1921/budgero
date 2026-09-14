@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@shared/ui/card';
 import { Button } from '@shared/ui/button';
 import { Plus, Sparkles } from 'lucide-react';
-import { useUiStore } from '@shared/store/useUiStore';
+import { buildCurrencyLocalizer, useUiStore } from '@shared/store/useUiStore';
 import {
   useCreateRecurringTransaction,
   useDeleteRecurringTransaction,
@@ -61,12 +61,26 @@ export function RecurringTransactionsSection() {
   const { permission, requestPermission } = useRecurringNotifications({ autoCheck: false });
 
   const accountsById = useMemo(() => {
-    const map = new Map<number, string>();
+    const map = new Map<number, (typeof accounts)[number]>();
     for (const account of accounts) {
-      map.set(account.ID, account.Name);
+      map.set(account.ID, account);
     }
     return map;
   }, [accounts]);
+
+  const accountLocalizersById = useMemo(() => {
+    const map = new Map<number, { format: (value: number) => string }>();
+    for (const account of accounts) {
+      const localizer = buildCurrencyLocalizer(
+        account.Currency,
+        selectedBudget?.NumberFormat ?? ''
+      );
+      if (localizer) map.set(account.ID, localizer);
+    }
+    return map;
+  }, [accounts, selectedBudget?.NumberFormat]);
+
+  const budgetCurrency = selectedBudget?.DisplayCurrency;
 
   const categoriesById = useMemo(() => {
     const map = new Map<number, string>();
@@ -240,7 +254,7 @@ export function RecurringTransactionsSection() {
     try {
       setProcessingOccurrenceId(occurrence.id);
       const result = await markReady.mutateAsync({ occurrenceId: occurrence.id });
-      const accountName = accountsById.get(result.occurrence.template.accountId);
+      const accountName = accountsById.get(result.occurrence.template.accountId)?.Name;
       toast.success('Transaction posted', {
         description: accountName
           ? `Recorded in ${accountName}. You can review it in the Transactions view.`
@@ -339,15 +353,21 @@ export function RecurringTransactionsSection() {
           <RecurringTemplateCard
             key={template.id}
             template={template}
-            accountName={accountsById.get(template.accountId) ?? 'Unknown account'}
+            accountName={accountsById.get(template.accountId)?.Name ?? 'Unknown account'}
+            accountCurrency={accountsById.get(template.accountId)?.Currency}
             toAccountName={
-              template.toAccountId != null ? accountsById.get(template.toAccountId) : undefined
+              template.toAccountId != null
+                ? accountsById.get(template.toAccountId)?.Name
+                : undefined
             }
             categoryName={
               template.categoryId ? categoriesById.get(template.categoryId) : 'Unassigned category'
             }
             nextOccurrence={nextOccurrenceByTemplate.get(template.id)}
-            localizer={globalLocalizer}
+            accountLocalizer={accountLocalizersById.get(template.accountId) ?? globalLocalizer}
+            budgetAmount={nextOccurrenceByTemplate.get(template.id)?.template.budgetAmount}
+            budgetCurrency={budgetCurrency}
+            budgetLocalizer={globalLocalizer}
             isProcessing={processingTemplateId === template.id}
             isTogglePending={updateRecurring.isPending}
             onToggleActive={(nextActive) => handleToggleActive(template, nextActive)}
@@ -406,12 +426,17 @@ export function RecurringTransactionsSection() {
             <RecurringOccurrenceCard
               key={occurrence.id}
               occurrence={occurrence}
-              accountName={accountsById.get(template.accountId) ?? 'Unknown account'}
+              accountName={accountsById.get(template.accountId)?.Name ?? 'Unknown account'}
+              accountCurrency={accountsById.get(template.accountId)?.Currency}
               toAccountName={
-                template.toAccountId != null ? accountsById.get(template.toAccountId) : undefined
+                template.toAccountId != null
+                  ? accountsById.get(template.toAccountId)?.Name
+                  : undefined
               }
               categoryName={categoryName}
-              localizer={globalLocalizer}
+              accountLocalizer={accountLocalizersById.get(template.accountId) ?? globalLocalizer}
+              budgetCurrency={budgetCurrency}
+              budgetLocalizer={globalLocalizer}
               isProcessing={processingOccurrenceId === occurrence.id}
               isMarkReadyPending={markReady.isPending}
               isSkipPending={skipOccurrence.isPending}

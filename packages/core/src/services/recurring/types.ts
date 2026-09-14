@@ -36,10 +36,17 @@ export interface RecurringTransaction {
   toAccountId: number | null;
   /**
    * For transfers, `amount` converted into the destination account's currency
-   * at the latest known rate (1:1 when unknown or currencies match). Only
+   * at the effective rate for the occurrence date (custom, then official;
+   * 1:1 when unknown or currencies match). Only
    * populated by occurrence queries; null elsewhere and for non-transfers.
    */
   destinationAmount?: MilliUnits | null;
+  /**
+   * The native amount converted into the budget display currency at the
+   * occurrence date's effective rate (custom, then official; latest known for
+   * future dates). Only populated by occurrence queries; null elsewhere.
+   */
+  budgetAmount?: MilliUnits | null;
   categoryId: number | null;
   name: string;
   memo: string;
@@ -141,7 +148,7 @@ export interface ProjectedTransactionRow {
   Date: string;
   Memo: string;
   Payee: string;
-  /** Budget-currency amounts (converted with the latest known rate) */
+  /** Budget-currency amounts (effective custom/official rate; latest known for future dates) */
   InflowConverted: MilliUnits;
   OutflowConverted: MilliUnits;
   /** Account-currency amounts (the template amount) */

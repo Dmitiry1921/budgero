@@ -20,9 +20,12 @@ import { formatRecurringAmount } from './format-recurring-amount';
 interface RecurringOccurrenceCardProps {
   occurrence: RecurringOccurrenceWithTemplate;
   accountName: string;
+  accountCurrency?: string;
   toAccountName?: string;
   categoryName: string;
-  localizer: { format: (n: number) => string };
+  accountLocalizer: { format: (n: number) => string };
+  budgetCurrency?: string;
+  budgetLocalizer?: { format: (n: number) => string };
   isProcessing: boolean;
   isMarkReadyPending: boolean;
   isSkipPending: boolean;
@@ -34,9 +37,12 @@ interface RecurringOccurrenceCardProps {
 export function RecurringOccurrenceCard({
   occurrence,
   accountName,
+  accountCurrency,
   toAccountName,
   categoryName,
-  localizer,
+  accountLocalizer,
+  budgetCurrency,
+  budgetLocalizer,
   isProcessing,
   isMarkReadyPending,
   isSkipPending,
@@ -45,7 +51,15 @@ export function RecurringOccurrenceCard({
   onSkip,
 }: RecurringOccurrenceCardProps) {
   const { template } = occurrence;
-  const amountDisplay = formatRecurringAmount(template, localizer);
+  const amountDisplay = formatRecurringAmount(template, accountLocalizer);
+  const budgetAmountDisplay =
+    template.budgetAmount != null &&
+    budgetLocalizer &&
+    accountCurrency &&
+    budgetCurrency &&
+    accountCurrency !== budgetCurrency
+      ? `≈ ${formatRecurringAmount(template, budgetLocalizer, template.budgetAmount)}`
+      : null;
   const dueLabel = formatDueLabel(occurrence.dueDate);
 
   return (
@@ -68,6 +82,9 @@ export function RecurringOccurrenceCard({
           </div>
           <div className="text-sm text-muted-foreground">
             <span className="font-medium text-foreground">Amount:</span> {amountDisplay}
+            {budgetAmountDisplay ? (
+              <span className="ml-2 text-xs">({budgetAmountDisplay})</span>
+            ) : null}
           </div>
           <div className="text-sm text-muted-foreground">
             <span className="font-medium text-foreground">

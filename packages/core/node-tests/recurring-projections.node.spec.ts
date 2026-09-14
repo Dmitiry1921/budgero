@@ -45,6 +45,43 @@ async function setup() {
 }
 
 describe('RecurringTransactionService.listProjectedTransactions', () => {
+  it('uses the effective custom rate for occurrence budget amounts', async () => {
+    const { services, budgetId, categoryId } = await setup();
+    const today = new Date();
+    const startDate = isoDate(today);
+    const foreignAccount = await services.accounts.createAccount(
+      'EUR account',
+      budgetId,
+      'checking',
+      'EUR',
+      0,
+      {},
+      true
+    );
+
+    await services.currency.saveRate('EUR', 'USD', 1.1, startDate, budgetId);
+    await services.currency.addCustomRate('EUR', 'USD', 1.2, startDate, null, budgetId);
+    await services.recurring.createRecurringTransaction({
+      budgetId,
+      accountId: foreignAccount.ID,
+      categoryId,
+      name: 'Foreign bill',
+      amount: 100,
+      direction: 'outflow',
+      schedule: { startDate, intervalUnit: 'month', intervalCount: 1 },
+    });
+
+    const occurrence = services.recurring.listOccurrences(budgetId, {
+      status: 'scheduled',
+    })[0];
+    expect(occurrence.template.budgetAmount).toBe(120);
+
+    const projected = services.recurring.listProjectedTransactions(budgetId, {
+      accountId: foreignAccount.ID,
+    });
+    expect(projected[0]?.OutflowConverted).toBe(120);
+  });
+
   it('projects scheduled occurrences as transaction-like rows', async () => {
     const { services, budgetId, account, categoryId } = await setup();
     const today = new Date();
@@ -403,6 +440,8 @@ describe('Recurring transfers', () => {
     expect(fromSource.length).toBeGreaterThan(0);
     expect(fromDestination.length).toBe(fromSource.length);
     expect(fromDestination[0].template.toAccountId).toBe(savings.ID);
+    expect(fromSource[0].template.budgetAmount).toBe(200);
+    expect(fromDestination[0].template.budgetAmount).toBe(200);
 
     // Unrelated accounts still see nothing
     const unrelated = services.recurring.listOccurrences(budgetId, {

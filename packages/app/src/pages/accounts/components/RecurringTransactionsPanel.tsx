@@ -30,6 +30,7 @@ export interface RecurringOccurrence {
     accountId: number;
     toAccountId: number | null;
     destinationAmount?: number | null;
+    budgetAmount?: number | null;
   };
 }
 
@@ -116,14 +117,18 @@ export const RecurringTransactionsPanel = React.memo(function RecurringTransacti
     [accountId]
   );
 
-  // On the destination side of a transfer, show the amount in this account's
-  // currency (converted at the latest known rate by the occurrence query).
+  // Budget display uses the occurrence's converted amount. Account display
+  // keeps the native amount, including the destination leg of a transfer.
   const occurrenceAmount = React.useCallback(
-    (template: RecurringOccurrence['template']) =>
-      template.toAccountId === accountId
+    (template: RecurringOccurrence['template']) => {
+      if (transactionCurrencyDisplay === 'budget' && template.budgetAmount != null) {
+        return template.budgetAmount;
+      }
+      return template.toAccountId === accountId
         ? (template.destinationAmount ?? template.amount)
-        : template.amount,
-    [accountId]
+        : template.amount;
+    },
+    [accountId, transactionCurrencyDisplay]
   );
 
   const totals = React.useMemo(() => {

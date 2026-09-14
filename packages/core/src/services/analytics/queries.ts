@@ -15,9 +15,9 @@ export interface AnalyticsQueryOptions {
 
 /**
  * Scheduled recurring occurrences projected into the transactions shape.
- * Budget-currency amounts use the latest known exchange rate (future months
- * never have rates of their own). Synthetic IDs are negative so they can't
- * collide with real transactions or match transaction_splits rows.
+ * Budget-currency amounts use the effective custom or official exchange rate;
+ * future months use the latest known rate. Synthetic IDs are negative so they
+ * can't collide with real transactions or match transaction_splits rows.
  */
 const PROJECTED_TRANSACTIONS_SQL = `
   SELECT

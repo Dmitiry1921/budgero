@@ -57,10 +57,14 @@ function endLabelFor(schedule: RecurringTransaction['schedule']): string | null 
 interface RecurringTemplateCardProps {
   template: RecurringTransaction;
   accountName: string;
+  accountCurrency?: string;
   toAccountName?: string;
   categoryName: string | undefined;
   nextOccurrence: RecurringOccurrenceWithTemplate | undefined;
-  localizer: { format: (n: number) => string };
+  accountLocalizer: { format: (n: number) => string };
+  budgetAmount?: number | null;
+  budgetCurrency?: string;
+  budgetLocalizer?: { format: (n: number) => string };
   isProcessing: boolean;
   isTogglePending: boolean;
   onToggleActive: (nextActive: boolean) => void;
@@ -71,10 +75,14 @@ interface RecurringTemplateCardProps {
 export function RecurringTemplateCard({
   template,
   accountName,
+  accountCurrency,
   toAccountName,
   categoryName,
   nextOccurrence,
-  localizer,
+  accountLocalizer,
+  budgetAmount,
+  budgetCurrency,
+  budgetLocalizer,
   isProcessing,
   isTogglePending,
   onToggleActive,
@@ -82,7 +90,15 @@ export function RecurringTemplateCard({
   onDelete,
 }: RecurringTemplateCardProps) {
   const dueLabel = nextOccurrence ? formatDueLabel(nextOccurrence.dueDate) : 'No upcoming dates';
-  const amountDisplay = formatRecurringAmount(template, localizer);
+  const amountDisplay = formatRecurringAmount(template, accountLocalizer);
+  const budgetAmountDisplay =
+    budgetAmount != null &&
+    budgetLocalizer &&
+    accountCurrency &&
+    budgetCurrency &&
+    accountCurrency !== budgetCurrency
+      ? `≈ ${formatRecurringAmount(template, budgetLocalizer, budgetAmount)}`
+      : null;
   const frequencyLabel = frequencyLabelFor(template.schedule);
   const endLabel = endLabelFor(template.schedule);
 
@@ -124,7 +140,12 @@ export function RecurringTemplateCard({
             )}
           </div>
           <div className="mt-1 flex shrink-0 flex-wrap items-center gap-3 self-end sm:mt-0 sm:justify-end sm:self-auto">
-            <Badge variant="outline">{amountDisplay}</Badge>
+            <div className="flex flex-col items-end gap-1">
+              <Badge variant="outline">{amountDisplay}</Badge>
+              {budgetAmountDisplay ? (
+                <span className="text-xs text-muted-foreground">{budgetAmountDisplay}</span>
+              ) : null}
+            </div>
             <Button
               variant="ghost"
               size="sm"
