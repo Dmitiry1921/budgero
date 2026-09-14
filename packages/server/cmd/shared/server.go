@@ -433,6 +433,11 @@ func setPWAHeaders(c echo.Context, path string) {
 		c.Response().Header().Set("Pragma", "no-cache")
 		c.Response().Header().Set("Expires", "0")
 		c.Response().Header().Set("Service-Worker-Allowed", "/")
+	case strings.HasSuffix(path, ".html"):
+		// The HTML shell points at hashed assets and must be revalidated so a
+		// deployment can publish a new entrypoint without leaving clients on a
+		// stale PWA shell for the asset cache lifetime.
+		c.Response().Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	case strings.HasSuffix(path, ".webmanifest"):
 		c.Response().Header().Set("Cache-Control", "public, max-age=86400")
 	default:
