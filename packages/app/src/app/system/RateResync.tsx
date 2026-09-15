@@ -18,24 +18,28 @@ export function RateResync() {
   const queryClient = useQueryClient();
   const selectedBudget = useUiStore((state) => state.selectedBudget);
   const budgetId = selectedBudget?.ID;
-  const running = useRef(false);
+  const spaceId = selectedBudget?.SpaceID;
   const lastOfficialRefreshKey = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!budgetId) return undefined;
+    if (!budgetId || !spaceId) return undefined;
+    let running = false;
+    let cancelled = false;
 
     const resync = async () => {
-      if (running.current) return;
+      if (running || cancelled) return;
       if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
       const runtime = getRuntime();
-      if (!runtime) return;
+      if (!runtime || runtime.getActiveSpaceId() !== spaceId || !runtime.servicesReady()) return;
       const services = runtime.services();
-      running.current = true;
+      const isCurrent = () =>
+        !cancelled && runtime.getActiveSpaceId() === spaceId && runtime.services() === services;
+      running = true;
       try {
         let changed = 0;
         let refreshedOfficialRates = false;
-        const refreshKey = `${budgetId}:${getTodayISO()}`;
-        const refreshStorageKey = `${OFFICIAL_RATE_REFRESH_PREFIX}${budgetId}`;
+        const refreshKey = `${spaceId}:${budgetId}:${getTodayISO()}`;
+        const refreshStorageKey = `${OFFICIAL_RATE_REFRESH_PREFIX}${spaceId}:${budgetId}`;
         let refreshedToday = lastOfficialRefreshKey.current === refreshKey;
         if (!refreshedToday) {
           try {
@@ -45,28 +49,36 @@ export function RateResync() {
           }
         }
         if (!refreshedToday) {
-          // Refresh the budget's local copy at most once per calendar day.
-          // If the provider is unavailable, the call throws and a later online
-          // event can retry instead of marking the day as complete.
-          await services.currency.refreshOfficialRates(budgetId);
-          lastOfficialRefreshKey.current = refreshKey;
-          refreshedOfficialRates = true;
           try {
-            window.localStorage.setItem(refreshStorageKey, refreshKey);
+            await services.currency.refreshOfficialRates(budgetId);
+            refreshedOfficialRates = true;
           } catch {
-            // Private browsing or storage restrictions should not block resync.
+            // A provider outage must not block reconciliation with cached or
+            // custom rates. Leave the refresh unmarked so reconnect can retry.
           }
         }
+        if (!isCurrent()) return;
         if (services.userMeta.getResyncRatesOnReconnect()) {
           changed += await services.currency.resyncPendingConversions(budgetId);
         }
+        if (!isCurrent()) return;
         // Daily true-up: converted balances follow native × latest rate,
         // journaled per account in account_revaluations.
         changed += await services.currency.revalueAccounts(budgetId);
+        if (!isCurrent()) return;
         if (refreshedOfficialRates || changed > 0) {
           // These service calls bypass the mutation executor and therefore
           // have no mutation-log entry or automatic local/snapshot persist.
           await runtime.finalizeOutOfBandMutation({ uploadSnapshot: true });
+          if (!isCurrent()) return;
+          if (refreshedOfficialRates) {
+            lastOfficialRefreshKey.current = refreshKey;
+            try {
+              window.localStorage.setItem(refreshStorageKey, refreshKey);
+            } catch {
+              // The in-memory marker still avoids repeat work this session.
+            }
+          }
           await Promise.all([
             queryClient.invalidateQueries({ queryKey: ['transactions'] }),
             queryClient.invalidateQueries({ queryKey: ['allTransactions'] }),
@@ -85,14 +97,17 @@ export function RateResync() {
       } catch {
         // Best-effort: a failed resync retries on the next online event.
       } finally {
-        running.current = false;
+        running = false;
       }
     };
 
     void resync();
     window.addEventListener('online', resync);
-    return () => window.removeEventListener('online', resync);
-  }, [budgetId, queryClient]);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('online', resync);
+    };
+  }, [budgetId, spaceId, queryClient]);
 
   return null;
 }
