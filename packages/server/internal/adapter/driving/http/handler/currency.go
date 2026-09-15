@@ -68,7 +68,12 @@ func (h *Handlers) GetExchangeRates(c echo.Context) error {
 
 	ctx := c.Request().Context()
 
-	rates, err := h.services.ExchangeRate.GetOrFetchRates(ctx, base, symbols, date)
+	var rates map[string]float64
+	if strings.EqualFold(c.QueryParam("refresh"), "true") {
+		rates, err = h.services.ExchangeRate.RefreshRates(ctx, base, symbols, date)
+	} else {
+		rates, err = h.services.ExchangeRate.GetOrFetchRates(ctx, base, symbols, date)
+	}
 	if err != nil {
 		log.Error().Err(err).Str("base", base).Str("date", date).Msg("failed fetching exchange rates")
 		return c.JSON(http.StatusBadGateway, map[string]string{"error": "failed to fetch rates"})

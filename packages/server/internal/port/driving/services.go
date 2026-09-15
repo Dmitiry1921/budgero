@@ -271,6 +271,10 @@ type ExchangeRateService interface {
 	// cache and fetching missing pairs from the external provider.
 	GetOrFetchRates(ctx context.Context, baseCurrency string, symbols []string, rateDate string) (map[string]float64, error)
 
+	// RefreshRates bypasses the server cache and fetches official rates from the
+	// external provider for the requested date.
+	RefreshRates(ctx context.Context, baseCurrency string, symbols []string, rateDate string) (map[string]float64, error)
+
 	// RefreshTodayRates re-fetches today's rates for every currency pair seen
 	// recently, keeping the cache warm for client balance true-ups. Returns
 	// the number of pairs refreshed.

@@ -240,6 +240,82 @@ describe('CurrencyService daily rates', () => {
     }
   });
 
+  it("marks the official-rate refresh request when replacing today's cached rate", async () => {
+    const adapter = await NodeSqlJsAdapter.create();
+    const sm = new ServiceManager();
+    await sm.initialize(adapter as DatabaseAdapter);
+    const { budgets, currency, accounts } = sm.getServices();
+
+    const bId = await budgets.createBudget({
+      name: 'Refresh',
+      display_currency: 'USD',
+      badge_icon: 'dollar',
+      number_format: '123,456.78',
+      create_default_categories: true,
+    });
+    await accounts.createAccount('EUR account', bId, 'checking', 'EUR', 0);
+
+    const today = new Date();
+    const todayDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    await currency.saveRate('EUR', 'USD', 1.1, todayDate, bId);
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ quotes: { USDEUR: 0.8 } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      await currency.restoreOfficialRates(bId);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toContain('refresh=true');
+      expect(currency.getLocalRate('EUR', 'USD', todayDate, bId)).toBeCloseTo(1.25, 6);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('stores a clamped current-day response under the response date, not a future date', async () => {
+    const adapter = await NodeSqlJsAdapter.create();
+    const sm = new ServiceManager();
+    await sm.initialize(adapter as DatabaseAdapter);
+    const { budgets, currency } = sm.getServices();
+
+    const bId = await budgets.createBudget({
+      name: 'Future rate request',
+      display_currency: 'USD',
+      badge_icon: 'dollar',
+      number_format: '123,456.78',
+      create_default_categories: true,
+    });
+    const today = new Date();
+    const todayDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowDate = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ date: todayDate, quotes: { EURUSD: 1.25 } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      await expect(currency.getOrFetchRate('EUR', 'USD', tomorrowDate, bId)).resolves.toBeCloseTo(
+        1.25,
+        6
+      );
+      expect(currency.getLocalRate('EUR', 'USD', tomorrowDate, bId)).toBeCloseTo(1.25, 6);
+      const futureRate = adapter.prepare(
+        'SELECT COUNT(*) AS Count FROM currency_rates WHERE BudgetID = ? AND RateDate = ?'
+      );
+      expect(futureRate.get(bId, tomorrowDate)).toEqual({ Count: 0 });
+      futureRate.finalize();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('serves cached rates within the 7-day fallback window, not beyond', async () => {
     const adapter = await NodeSqlJsAdapter.create();
     const sm = new ServiceManager();

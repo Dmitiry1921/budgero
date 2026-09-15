@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { getRuntime } from '@shared/runtime/global';
 import { useUiStore } from '@shared/store/useUiStore';
+import { getTodayISO } from '@shared/lib/date-utils';
 
 /**
  * Re-resolves offline/manual-rate conversions to official rates when the app
@@ -14,6 +15,7 @@ export function RateResync() {
   const selectedBudget = useUiStore((state) => state.selectedBudget);
   const budgetId = selectedBudget?.ID;
   const running = useRef(false);
+  const lastOfficialRefreshKey = useRef<string | null>(null);
 
   useEffect(() => {
     if (!budgetId) return undefined;
@@ -27,13 +29,20 @@ export function RateResync() {
       running.current = true;
       try {
         let changed = 0;
+        let refreshedOfficialRates = false;
+        const refreshKey = `${budgetId}:${getTodayISO()}`;
+        if (lastOfficialRefreshKey.current !== refreshKey) {
+          await services.currency.refreshOfficialRates(budgetId);
+          lastOfficialRefreshKey.current = refreshKey;
+          refreshedOfficialRates = true;
+        }
         if (services.userMeta.getResyncRatesOnReconnect()) {
           changed += await services.currency.resyncPendingConversions(budgetId);
         }
         // Daily true-up: converted balances follow native × latest rate,
         // journaled per account in account_revaluations.
         changed += await services.currency.revalueAccounts(budgetId);
-        if (changed > 0) {
+        if (refreshedOfficialRates || changed > 0) {
           // These service calls bypass the mutation executor and therefore
           // have no mutation-log entry or automatic local/snapshot persist.
           await runtime.finalizeOutOfBandMutation({ uploadSnapshot: true });
@@ -49,6 +58,7 @@ export function RateResync() {
             queryClient.invalidateQueries({ queryKey: ['balanceByDates'] }),
             queryClient.invalidateQueries({ queryKey: ['onBudgetBalance'] }),
             queryClient.invalidateQueries({ queryKey: ['onBudgetBalanceByDates'] }),
+            queryClient.invalidateQueries({ queryKey: ['recurringOccurrences'] }),
           ]);
         }
       } catch {

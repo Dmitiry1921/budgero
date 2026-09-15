@@ -4,7 +4,7 @@
 FROM node:22-alpine AS frontend-builder
 
 # Install pnpm
-RUN npm install -g pnpm
+RUN npm install -g pnpm@11.1.2
 
 # Set working directory
 WORKDIR /app
@@ -17,7 +17,7 @@ COPY packages/app/package.json ./packages/app/
 
 # Install dependencies with pnpm store cache
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --prod=false
+    CI=true pnpm install --frozen-lockfile --prod=false
 
 # Copy source code after dependency installation
 COPY packages/core ./packages/core/

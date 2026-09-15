@@ -319,6 +319,31 @@ func TestExchangeRateService_GetOrFetchRates_FetchesMissingAndStoresInverse(t *t
 	}
 }
 
+func TestExchangeRateService_RefreshRates_BypassesCache(t *testing.T) {
+	ctx := context.Background()
+	rateRepo := fake.NewExchangeRateRepository()
+	provider := &stubProvider{rates: map[string]float64{"EUR": 0.85}, servedDate: "2026-08-06"}
+	svc := application.NewExchangeRateService(rateRepo, provider)
+
+	_ = rateRepo.UpsertRate(ctx, "USD", "EUR", "2026-08-06", 0.80)
+
+	quotes, err := svc.RefreshRates(ctx, "USD", []string{"EUR"}, "2026-08-06")
+	if err != nil {
+		t.Fatalf("RefreshRates() error = %v", err)
+	}
+	if quotes["EUR"] != 0.85 {
+		t.Errorf("quotes[EUR] = %v, want refreshed 0.85", quotes["EUR"])
+	}
+	if provider.calls != 1 {
+		t.Errorf("provider.calls = %d, want 1", provider.calls)
+	}
+
+	rate, _, err := rateRepo.GetLatestRateOnOrBefore(ctx, "USD", "EUR", "2026-08-06")
+	if err != nil || rate != 0.85 {
+		t.Errorf("cached rate = %v (err %v), want refreshed 0.85", rate, err)
+	}
+}
+
 func TestExchangeRateService_GetOrFetchRates_StaleFallbackWhenProviderDown(t *testing.T) {
 	ctx := context.Background()
 	rateRepo := fake.NewExchangeRateRepository()

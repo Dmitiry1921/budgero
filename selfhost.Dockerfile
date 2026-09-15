@@ -9,7 +9,7 @@ FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-builder
 
 WORKDIR /app
 
-RUN npm install -g pnpm
+RUN npm install -g pnpm@11.1.2
 
 # Copy workspace manifests
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -19,7 +19,7 @@ COPY packages/app/package.json packages/app/
 
 # Install dependencies with pnpm store cache
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --prod=false
+    CI=true pnpm install --frozen-lockfile --prod=false
 
 # Copy source
 COPY packages/core ./packages/core

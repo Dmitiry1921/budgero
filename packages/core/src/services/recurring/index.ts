@@ -104,7 +104,7 @@ const MAX_GENERATED_OCCURRENCES = 240;
 /**
  * Account-currency → budget-currency rate for a projected occurrence.
  * Custom date-range rates have priority, followed by the latest known official
- * rate (future months never have rates), then 1 when no rate exists.
+ * rate no later than today for future occurrences, then 1 when no rate exists.
  * Expects aliases: r = recurring_transactions, o = occurrences, a = accounts, b = budgets.
  * Shared with the projected-transactions relation in analytics — drift here
  * silently skews projections.
@@ -134,6 +134,10 @@ export const PROJECTION_RATE_SQL = `
       WHERE cr.BudgetID = o.BudgetID
         AND cr.FromCurrency = a.Currency
         AND cr.ToCurrency = b.DisplayCurrency
+        AND cr.RateDate <= CASE
+          WHEN o.DueDate > date('now', 'localtime') THEN date('now', 'localtime')
+          ELSE o.DueDate
+        END
       ORDER BY cr.RateDate DESC LIMIT 1
     ),
     (
@@ -141,6 +145,10 @@ export const PROJECTION_RATE_SQL = `
       WHERE cr.BudgetID = o.BudgetID
         AND cr.FromCurrency = b.DisplayCurrency
         AND cr.ToCurrency = a.Currency
+        AND cr.RateDate <= CASE
+          WHEN o.DueDate > date('now', 'localtime') THEN date('now', 'localtime')
+          ELSE o.DueDate
+        END
       ORDER BY cr.RateDate DESC LIMIT 1
     ),
     1
@@ -178,6 +186,10 @@ const TRANSFER_LEG_RATE_SQL = `
       WHERE cr.BudgetID = o.BudgetID
         AND cr.FromCurrency = a.Currency
         AND cr.ToCurrency = a2.Currency
+        AND cr.RateDate <= CASE
+          WHEN o.DueDate > date('now', 'localtime') THEN date('now', 'localtime')
+          ELSE o.DueDate
+        END
       ORDER BY cr.RateDate DESC LIMIT 1
     ),
     (
@@ -185,6 +197,10 @@ const TRANSFER_LEG_RATE_SQL = `
       WHERE cr.BudgetID = o.BudgetID
         AND cr.FromCurrency = a2.Currency
         AND cr.ToCurrency = a.Currency
+        AND cr.RateDate <= CASE
+          WHEN o.DueDate > date('now', 'localtime') THEN date('now', 'localtime')
+          ELSE o.DueDate
+        END
       ORDER BY cr.RateDate DESC LIMIT 1
     ),
     1
@@ -675,7 +691,7 @@ export class RecurringTransactionService {
    * Returns scheduled (not ready, not skipped) occurrences of active templates
    * projected into a transaction-like shape. Budget-currency amounts use the
    * effective custom or official exchange rate; future months use the latest
-   * known rate because they do not have rates of their own.
+   * known rate no later than today because they do not have rates of their own.
    */
   listProjectedTransactions(
     budgetId: number,

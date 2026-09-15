@@ -45,6 +45,47 @@ async function setup() {
 }
 
 describe('RecurringTransactionService.listProjectedTransactions', () => {
+  it('does not use a future-dated cached rate for today-based projections', async () => {
+    const { adapter, services, budgetId, categoryId } = await setup();
+    const today = new Date();
+    const todayDate = isoDate(today);
+    const futureDate = isoDate(addMonths(today, 1));
+    const foreignAccount = await services.accounts.createAccount(
+      'EUR account',
+      budgetId,
+      'checking',
+      'EUR',
+      0,
+      {},
+      true
+    );
+
+    const insertRate = adapter.prepare(
+      `INSERT INTO currency_rates (FromCurrency, ToCurrency, Rate, RateDate, LastUpdated, BudgetID)
+       VALUES (?, ?, ?, ?, datetime('now'), ?)`
+    );
+    insertRate.run('EUR', 'USD', 1.1, todayDate, budgetId);
+    // This row can be created when a future transaction first requests a rate.
+    insertRate.run('EUR', 'USD', 0.5, futureDate, budgetId);
+    insertRate.finalize();
+
+    await services.recurring.createRecurringTransaction({
+      budgetId,
+      accountId: foreignAccount.ID,
+      categoryId,
+      name: 'Future bill',
+      amount: 100,
+      direction: 'outflow',
+      schedule: { startDate: futureDate, intervalUnit: 'month', intervalCount: 1 },
+    });
+
+    const occurrence = services.recurring.listOccurrences(budgetId, {
+      status: 'scheduled',
+    })[0];
+
+    expect(occurrence.template.budgetAmount).toBe(110);
+  });
+
   it('uses the effective custom rate for occurrence budget amounts', async () => {
     const { services, budgetId, categoryId } = await setup();
     const today = new Date();

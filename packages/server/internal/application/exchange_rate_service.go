@@ -105,6 +105,37 @@ func (s *ExchangeRateService) GetOrFetchRates(ctx context.Context, baseCurrency 
 	return quotes, nil
 }
 
+// RefreshRates bypasses the cache and fetches the requested pairs directly
+// from the provider. It is used when a client explicitly asks to replace its
+// local daily rate with the latest official dataset.
+func (s *ExchangeRateService) RefreshRates(ctx context.Context, baseCurrency string, symbols []string, rateDate string) (map[string]float64, error) {
+	if s.provider == nil {
+		return nil, fmt.Errorf("no currency provider configured")
+	}
+
+	rates, servedDate, err := s.provider.GetRates(ctx, baseCurrency, rateDate)
+	if err != nil {
+		return nil, fmt.Errorf("refreshing rates for %s on %s: %w", baseCurrency, rateDate, err)
+	}
+
+	quotes := make(map[string]float64, len(symbols))
+	for _, sym := range symbols {
+		rate, ok := rates[sym]
+		if !ok || rate == 0 {
+			continue
+		}
+		if err := s.rateRepo.UpsertRate(ctx, baseCurrency, sym, servedDate, rate); err != nil {
+			return nil, fmt.Errorf("storing refreshed rate %s/%s: %w", baseCurrency, sym, err)
+		}
+		if err := s.rateRepo.UpsertRate(ctx, sym, baseCurrency, servedDate, 1.0/rate); err != nil {
+			return nil, fmt.Errorf("storing refreshed inverse rate %s/%s: %w", sym, baseCurrency, err)
+		}
+		quotes[sym] = rate
+	}
+
+	return quotes, nil
+}
+
 // rateRefreshLookbackDays bounds which cached pairs count as "in use".
 const rateRefreshLookbackDays = 35
 
