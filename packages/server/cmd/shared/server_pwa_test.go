@@ -1,4 +1,4 @@
-package shared
+package shared //nolint:revive // var-naming: tests access unexported helpers in the shared command package
 
 import (
 	"net/http"
