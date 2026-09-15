@@ -14,7 +14,7 @@ function addMonths(date: Date, months: number): Date {
   return result;
 }
 
-async function setup() {
+async function setup(displayCurrency = 'USD') {
   const adapter = await NodeSqlJsAdapter.create();
   const sm = new ServiceManager();
   await sm.initialize(adapter as DatabaseAdapter);
@@ -22,7 +22,7 @@ async function setup() {
 
   const budgetId = await services.budgets.createBudget({
     name: 'Projections',
-    display_currency: 'USD',
+    display_currency: displayCurrency,
     badge_icon: 'dollar',
     number_format: '123,456.78',
     create_default_categories: true,
@@ -805,3 +805,118 @@ async function setupCategory(
   const groupId = services.categories.addCategoryGroup('Investing Group', budgetId);
   return { categoryId: services.categories.addCategory(groupId, budgetId, 'Investing') };
 }
+
+describe('Recurring currency storage scales', () => {
+  it.each([
+    { source: 'BTC', budget: 'USD', amount: 1_000_000, rate: 60_000, expected: 600_000 },
+    { source: 'BTC', budget: 'EUR', amount: 1_000_000, rate: 50_000, expected: 500_000 },
+    { source: 'ETH', budget: 'USD', amount: 10_000_000, rate: 3_000, expected: 300_000 },
+  ])(
+    'keeps $source → $budget amounts consistent in cards, rows and analytics',
+    async ({ source, budget, amount, rate, expected }) => {
+      const { services, budgetId, categoryId } = await setup(budget);
+      const account = await services.accounts.createAccount(
+        'Foreign',
+        budgetId,
+        'checking',
+        source,
+        0,
+        {},
+        true
+      );
+      const date = isoDate(new Date());
+      services.currency.saveRate(source, budget, rate, date, budgetId);
+      await services.recurring.createRecurringTransaction({
+        budgetId,
+        accountId: account.ID,
+        categoryId,
+        name: 'Foreign bill',
+        amount,
+        direction: 'outflow',
+        schedule: { startDate: date, intervalUnit: 'month', intervalCount: 1 },
+      });
+      const occurrence = services.recurring.listOccurrences(budgetId, { status: 'scheduled' })[0];
+      expect(occurrence.template.budgetAmount).toBe(expected);
+      const projected = services.recurring.listProjectedTransactions(budgetId, {
+        accountId: account.ID,
+        fromDate: date,
+        toDate: date,
+      });
+      expect(projected).toHaveLength(1);
+      expect(projected[0].OutflowNative).toBe(amount);
+      expect(projected[0].OutflowConverted).toBe(expected);
+      const summary = services.analytics.getPeriodSummary(date, date, budgetId, {
+        includeProjections: true,
+      });
+      expect(summary.TotalSpending).toBe(expected);
+    }
+  );
+
+  it.each([
+    {
+      source: 'BTC',
+      destination: 'USD',
+      amount: 1_000_000,
+      rate: 60_000,
+      expected: 600_000,
+      budgetAmount: 600_000,
+    },
+    {
+      source: 'USD',
+      destination: 'BTC',
+      amount: 600_000,
+      rate: 1 / 60_000,
+      expected: 1_000_000,
+      budgetAmount: 600_000,
+    },
+  ])(
+    'converts both legs of a $source → $destination recurring transfer',
+    async ({ source, destination, amount, rate, expected, budgetAmount }) => {
+      const { services, budgetId } = await setup();
+      const from = await services.accounts.createAccount(
+        'Source',
+        budgetId,
+        'checking',
+        source,
+        0,
+        {},
+        true
+      );
+      const to = await services.accounts.createAccount(
+        'Destination',
+        budgetId,
+        'checking',
+        destination,
+        0,
+        {},
+        true
+      );
+      const date = isoDate(new Date());
+      services.currency.saveRate(source, destination, rate, date, budgetId);
+      await services.recurring.createRecurringTransaction({
+        budgetId,
+        accountId: from.ID,
+        toAccountId: to.ID,
+        name: 'Transfer',
+        amount,
+        direction: 'outflow',
+        schedule: { startDate: date, intervalUnit: 'month', intervalCount: 1 },
+      });
+      const occurrence = services.recurring.listOccurrences(budgetId, {
+        status: 'scheduled',
+        accountId: to.ID,
+      })[0];
+      expect(occurrence.template.destinationAmount).toBe(expected);
+      expect(occurrence.template.budgetAmount).toBe(budgetAmount);
+      const projected = services.recurring.listProjectedTransactions(budgetId, {
+        fromDate: date,
+        toDate: date,
+      });
+      expect(projected.find((row) => row.AccountID === from.ID)?.OutflowConverted).toBe(
+        budgetAmount
+      );
+      expect(projected.find((row) => row.AccountID === to.ID)?.InflowConverted).toBe(budgetAmount);
+      expect(projected.find((row) => row.AccountID === to.ID)?.InflowNative).toBe(expected);
+    }
+  );
+});

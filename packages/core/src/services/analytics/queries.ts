@@ -1,6 +1,6 @@
 import { DatabaseAdapter } from '../../database/interface.js';
 import { getRow, allRows } from '../../database/sql.js';
-import { PROJECTION_RATE_SQL } from '../recurring/index.js';
+import { PROJECTION_AMOUNT_SQL } from '../recurring/index.js';
 import { NO_SPLITS_FILTER } from '../transactions/queries.js';
 
 export interface AnalyticsQueryOptions {
@@ -29,9 +29,9 @@ const PROJECTED_TRANSACTIONS_SQL = `
     COALESCE(NULLIF(r.Memo, ''), r.Name) AS Memo,
     0 AS Reconciled,
     CASE WHEN r.Direction = 'inflow'
-      THEN CAST(ROUND(r.Amount * ${PROJECTION_RATE_SQL}) AS INTEGER) ELSE 0 END AS InflowConverted,
+      THEN ${PROJECTION_AMOUNT_SQL} ELSE 0 END AS InflowConverted,
     CASE WHEN r.Direction = 'outflow'
-      THEN CAST(ROUND(r.Amount * ${PROJECTION_RATE_SQL}) AS INTEGER) ELSE 0 END AS OutflowConverted,
+      THEN ${PROJECTION_AMOUNT_SQL} ELSE 0 END AS OutflowConverted,
     o.BudgetID AS BudgetID,
     r.Name AS Payee,
     NULL AS LabelID

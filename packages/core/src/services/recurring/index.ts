@@ -1,7 +1,12 @@
 import { DatabaseAdapter } from '../../database/interface.js';
 import { getRow, allRows, run } from '../../database/sql.js';
 import { asMilli, ZERO_MILLI } from '../../money/index.js';
-import { convertScaled } from '../../currencies/index.js';
+import {
+  convertScaled,
+  FIAT_SCALE,
+  CRYPTO_SCALE,
+  listCryptoCurrencies,
+} from '../../currencies/index.js';
 import { ValidationError, NotFoundError } from '../../types/index.js';
 import { safeParseJSON } from '../../utils/json.js';
 import { getLocalDateString, getUTCDateString } from '../../utils/date.js';
@@ -206,6 +211,25 @@ const TRANSFER_LEG_RATE_SQL = `
     1
   ) END
 `;
+
+// All identifiers below are fixed query aliases; the currency codes come
+// from the same registry used by convertScaled for posted transactions.
+const cryptoCodesSql = listCryptoCurrencies()
+  .map(({ code }) => `'${code}'`)
+  .join(', ');
+
+function currencyScaleSql(column: string): string {
+  return `(CASE WHEN UPPER(${column}) IN (${cryptoCodesSql}) THEN ${CRYPTO_SCALE} ELSE ${FIAT_SCALE} END)`;
+}
+
+function projectedAmountSql(rate: string, destinationCurrency: string): string {
+  return `CAST(ROUND(r.Amount * (${rate}) *
+    (1.0 * ${currencyScaleSql(destinationCurrency)} / ${currencyScaleSql('a.Currency')})) AS INTEGER)`;
+}
+
+/** Budget amounts shared by occurrence cards, transaction rows and analytics. */
+export const PROJECTION_AMOUNT_SQL = projectedAmountSql(PROJECTION_RATE_SQL, 'b.DisplayCurrency');
+const TRANSFER_LEG_AMOUNT_SQL = projectedAmountSql(TRANSFER_LEG_RATE_SQL, 'a2.Currency');
 
 const occurrenceColumns = `
   o.ID AS OccurrenceID,
@@ -672,9 +696,9 @@ export class RecurringTransactionService {
       this.db,
       `SELECT ${occurrenceColumns}, ${templateColumns},
          CASE WHEN r.ToAccountID IS NULL THEN NULL
-           ELSE CAST(ROUND(r.Amount * ${TRANSFER_LEG_RATE_SQL}) AS INTEGER)
+           ELSE ${TRANSFER_LEG_AMOUNT_SQL}
          END AS TemplateDestinationAmount,
-         CAST(ROUND(r.Amount * ${PROJECTION_RATE_SQL}) AS INTEGER) AS TemplateBudgetAmount
+         ${PROJECTION_AMOUNT_SQL} AS TemplateBudgetAmount
        FROM recurring_transaction_occurrences o
        JOIN recurring_transactions r ON r.ID = o.RecurringTransactionID
        JOIN accounts a ON a.ID = r.AccountID
@@ -752,9 +776,9 @@ export class RecurringTransactionService {
            ELSE transfer_destination.Name
          END AS Payee,
          CASE WHEN r.Direction = 'inflow'
-           THEN CAST(ROUND(r.Amount * ${PROJECTION_RATE_SQL}) AS INTEGER) ELSE 0 END AS InflowConverted,
+           THEN ${PROJECTION_AMOUNT_SQL} ELSE 0 END AS InflowConverted,
          CASE WHEN r.Direction = 'outflow'
-           THEN CAST(ROUND(r.Amount * ${PROJECTION_RATE_SQL}) AS INTEGER) ELSE 0 END AS OutflowConverted,
+           THEN ${PROJECTION_AMOUNT_SQL} ELSE 0 END AS OutflowConverted,
          CASE WHEN r.Direction = 'inflow' THEN r.Amount ELSE 0 END AS InflowNative,
          CASE WHEN r.Direction = 'outflow' THEN r.Amount ELSE 0 END AS OutflowNative
        FROM recurring_transaction_occurrences o
@@ -785,9 +809,9 @@ export class RecurringTransactionService {
            WHEN COALESCE(a.OnBudget, 1) <> 0 AND COALESCE(a2.OnBudget, 1) = 0 THEN a2.Name
            ELSE a.Name
          END AS Payee,
-         CAST(ROUND(r.Amount * ${PROJECTION_RATE_SQL}) AS INTEGER) AS InflowConverted,
+         ${PROJECTION_AMOUNT_SQL} AS InflowConverted,
          0 AS OutflowConverted,
-         CAST(ROUND(r.Amount * ${TRANSFER_LEG_RATE_SQL}) AS INTEGER) AS InflowNative,
+         ${TRANSFER_LEG_AMOUNT_SQL} AS InflowNative,
          0 AS OutflowNative
        FROM recurring_transaction_occurrences o
        JOIN recurring_transactions r ON r.ID = o.RecurringTransactionID
