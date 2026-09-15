@@ -1,6 +1,7 @@
 package shared
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -21,7 +22,7 @@ func TestSetPWAHeadersDoesNotCacheHTMLShell(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := echo.New()
-			ctx := e.NewContext(httptest.NewRequest("GET", tt.path, nil), httptest.NewRecorder())
+			ctx := e.NewContext(httptest.NewRequest(http.MethodGet, tt.path, http.NoBody), httptest.NewRecorder())
 
 			setPWAHeaders(ctx, tt.path)
 
