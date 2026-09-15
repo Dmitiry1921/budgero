@@ -136,17 +136,22 @@ export class CurrencyService {
   ): number | null {
     if (fromCurrency === toCurrency) return 1;
 
-    const exact = this.resolveAndCacheRate(fromCurrency, toCurrency, rateDate, budgetId);
+    // Future transactions use today's official rates. Keep the freshness
+    // window anchored to today too, rather than rejecting today's rate as
+    // stale relative to a payment scheduled weeks or months from now.
+    const today = getLocalDateString();
+    const effectiveDate = rateDate > today ? today : rateDate;
+    const exact = this.resolveAndCacheRate(fromCurrency, toCurrency, effectiveDate, budgetId);
     if (exact) return exact;
 
     const windowStart = CurrencyService.addDays(
-      rateDate,
+      effectiveDate,
       -CurrencyService.RATE_FALLBACK_WINDOW_DAYS
     );
     const direct = this.queries.getLatestCurrencyRateOnOrBefore(
       fromCurrency,
       toCurrency,
-      rateDate,
+      effectiveDate,
       budgetId
     );
     if (direct && direct.RateDate >= windowStart) return direct.Rate;
@@ -154,7 +159,7 @@ export class CurrencyService {
     const reciprocal = this.queries.getLatestCurrencyRateOnOrBefore(
       toCurrency,
       fromCurrency,
-      rateDate,
+      effectiveDate,
       budgetId
     );
     if (reciprocal && reciprocal.RateDate >= windowStart) return 1 / reciprocal.Rate;
@@ -336,7 +341,9 @@ export class CurrencyService {
 
     // STEP 2: Fetch from the API (the dataset serves any base directly)
     try {
-      await this.fetchAndStoreRates([toCurrency], fromCurrency, rateDate, budgetId);
+      const today = getLocalDateString();
+      const effectiveDate = rateDate > today ? today : rateDate;
+      await this.fetchAndStoreRates([toCurrency], fromCurrency, effectiveDate, budgetId);
       const fetched = this.findNearbyRate(fromCurrency, toCurrency, rateDate, budgetId);
       if (fetched) {
         debugLog(`Successfully fetched rate: ${fromCurrency} → ${toCurrency} = ${fetched}`);
