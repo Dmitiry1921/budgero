@@ -4,10 +4,14 @@ import { getRuntime } from '@shared/runtime/global';
 import { useUiStore } from '@shared/store/useUiStore';
 import { getTodayISO } from '@shared/lib/date-utils';
 
+const OFFICIAL_RATE_REFRESH_PREFIX = 'budgero:official-rate-refresh:';
+
 /**
  * Re-resolves offline/manual-rate conversions to official rates when the app
  * (re)gains connectivity. Runs once on mount and on every browser online
- * event; gated by the user_meta ResyncRatesOnReconnect opt-in (default on).
+ * event; the official daily-rate refresh is limited to once per calendar day
+ * per budget and browser. The manual-rate resync is gated by the user_meta
+ * ResyncRatesOnReconnect opt-in (default on).
  * Rows the user pinned (ExchangeRateOverride) are never touched.
  */
 export function RateResync() {
@@ -31,10 +35,27 @@ export function RateResync() {
         let changed = 0;
         let refreshedOfficialRates = false;
         const refreshKey = `${budgetId}:${getTodayISO()}`;
-        if (lastOfficialRefreshKey.current !== refreshKey) {
+        const refreshStorageKey = `${OFFICIAL_RATE_REFRESH_PREFIX}${budgetId}`;
+        let refreshedToday = lastOfficialRefreshKey.current === refreshKey;
+        if (!refreshedToday) {
+          try {
+            refreshedToday = window.localStorage.getItem(refreshStorageKey) === refreshKey;
+          } catch {
+            // Private browsing or storage restrictions should not block resync.
+          }
+        }
+        if (!refreshedToday) {
+          // Refresh the budget's local copy at most once per calendar day.
+          // If the provider is unavailable, the call throws and a later online
+          // event can retry instead of marking the day as complete.
           await services.currency.refreshOfficialRates(budgetId);
           lastOfficialRefreshKey.current = refreshKey;
           refreshedOfficialRates = true;
+          try {
+            window.localStorage.setItem(refreshStorageKey, refreshKey);
+          } catch {
+            // Private browsing or storage restrictions should not block resync.
+          }
         }
         if (services.userMeta.getResyncRatesOnReconnect()) {
           changed += await services.currency.resyncPendingConversions(budgetId);

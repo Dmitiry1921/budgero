@@ -28,7 +28,7 @@ Your budget currency is the single unit Budgero uses for totals, insights, and R
 Budgero lets each account keep its native currency. When transactions post, Budgero stores both the original amount and a converted amount in the budget currency:
 
 - Budgero pulls official exchange rates daily and caches them in the budget file. How long the cache is kept is configurable in Settings → Currencies (30 days by default) — older rates are pruned to keep the budget file small and refetched on demand.
-- When a fresh rate is needed, Budgero fetches it from the exchange-rate service and stores it. When an online session starts, it also refreshes the official rates for the current day so cached rates do not silently remain stale. If you're offline and no cached rate exists, you can supply a manual rate so the conversion can proceed; that manual rate is replaced automatically once you reconnect, unless you turn the "update offline rates" option off — and rates you pin on a transaction are never touched.
+- When a fresh rate is needed, Budgero fetches it from the exchange-rate service and stores it. During the first successful online session of each calendar day, it also refreshes the official rates for the current day so cached rates do not silently remain stale. If you're offline and no cached rate exists, you can supply a manual rate so the conversion can proceed; that manual rate is replaced automatically once you reconnect, unless you turn the "update offline rates" option off — and rates you pin on a transaction are never touched.
 - Converted balances update automatically when you edit a transaction, reconcile an account, or import history so Ready to Assign and reports stay accurate.
 
 ## Changing the budget currency later
